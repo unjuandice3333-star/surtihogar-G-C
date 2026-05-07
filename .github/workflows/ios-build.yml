@@ -32,14 +32,9 @@ jobs:
       - name: Sync Capacitor iOS
         run: npx cap sync ios
 
-      - name: Install CocoaPods
-        run: |
-          cd ios/App
-          pod install
-
       - name: Build Xcode Project (Unsigned)
         run: |
-          xcodebuild -workspace ios/App/App.xcworkspace \
+          xcodebuild -project ios/App/App.xcodeproj \
                      -scheme App \
                      -configuration Debug \
                      -sdk iphoneos \
@@ -48,6 +43,7 @@ jobs:
                      CODE_SIGNING_REQUIRED=NO \
                      CODE_SIGN_ONLY=NO \
                      clean build
+
 
       - name: Compress Compiled App
         run: |
