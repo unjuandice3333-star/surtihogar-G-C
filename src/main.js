@@ -1101,6 +1101,28 @@ const render = () => {
                     <a href="https://www.google.com/maps?q=${coords.lat},${coords.lng}" target="_blank" style="color:#10b981; display:inline-flex; align-items:center; gap:4px; text-decoration:none; font-weight:800; margin-left:8px;" title="Ver Mapa"><i data-lucide="map-pin" style="width:12px;"></i></a>
                   ` : '';
 
+                  let arrivalDiffHtml = '';
+                  let departureDiffHtml = '';
+
+                  if (scheduled) {
+                     const sStart = new Date(scheduled.start_time);
+                     const sEnd = new Date(scheduled.end_time);
+
+                     if (r.firstArrival) {
+                        const arrT = new Date(r.firstArrival);
+                        const diff = Math.floor((arrT.getTime() - sStart.getTime()) / 60000);
+                        if (diff > 0) arrivalDiffHtml = `<div style="color:#b45309; font-size:9px; font-weight:800; text-transform:uppercase;">⚠ ${diff} min tarde</div>`;
+                        else arrivalDiffHtml = `<div style="color:#166534; font-size:9px; font-weight:800; text-transform:uppercase;">✓ ${Math.abs(diff)} min antes</div>`;
+                     }
+
+                     if (r.lastDeparture) {
+                        const depT = new Date(r.lastDeparture);
+                        const diff = Math.floor((depT.getTime() - sEnd.getTime()) / 60000);
+                        if (diff > 0) departureDiffHtml = `<div style="color:#1d4ed8; font-size:9px; font-weight:800; text-transform:uppercase;">⚡ ${diff} min extra</div>`;
+                        else departureDiffHtml = `<div style="color:#b91c1c; font-size:9px; font-weight:800; text-transform:uppercase;">❌ ${Math.abs(diff)} min menos</div>`;
+                     }
+                  }
+
                   return `
                   <tr style="border-bottom:1px solid #f1f5f9; transition: background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
                     <td style="padding:18px 20px;">
@@ -1113,12 +1135,14 @@ const render = () => {
                         ${formatTime(r.firstArrival)}
                         ${mapLink(r.gpsArrival)}
                       </div>
+                      ${arrivalDiffHtml}
                     </td>
                     <td style="padding:18px;">
                       <div style="display:flex; align-items:center;">
                         ${formatTime(r.lastDeparture)}
                         ${mapLink(r.gpsDeparture)}
                       </div>
+                      ${departureDiffHtml}
                     </td>
                     <td style="padding:18px;">
                       <div style="display:flex; align-items:center; gap:8px;">
@@ -1263,11 +1287,33 @@ const render = () => {
                       : `<span style="background:#eff6ff; color:#1d4ed8; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dbeafe;">🟢 ACTIVO</span>`;
                   }
 
-                  const formatTime = (ts) => ts ? `<div style="font-weight:800; font-size:14px; color:#1e293b;">${new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : '<div style="color:#cbd5e1;">--:--</div>';
+                  const formatTime = (ts) => ts ? `<div style="font-weight:800; font-size:14px; color:#1e293b;">${new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : '<div style="color:#cbd5e1; font-weight:500;">--:--</div>';
                   
                   const mapLink = (coords) => coords ? `
                     <a href="https://www.google.com/maps?q=${coords.lat},${coords.lng}" target="_blank" style="color:#10b981; display:inline-flex; align-items:center; margin-left:8px;" title="GPS"><i data-lucide="map-pin" style="width:12px;"></i></a>
                   ` : '';
+
+                  let arrivalDiffHtml = '';
+                  let departureDiffHtml = '';
+
+                  if (scheduled) {
+                     const sStart = new Date(scheduled.start_time);
+                     const sEnd = new Date(scheduled.end_time);
+
+                     if (r.firstArrival) {
+                        const arrT = new Date(r.firstArrival);
+                        const diff = Math.floor((arrT.getTime() - sStart.getTime()) / 60000);
+                        if (diff > 0) arrivalDiffHtml = `<div style="color:#b45309; font-size:9px; font-weight:800; text-transform:uppercase;">⚠ ${diff} min tarde</div>`;
+                        else arrivalDiffHtml = `<div style="color:#166534; font-size:9px; font-weight:800; text-transform:uppercase;">✓ ${Math.abs(diff)} min antes</div>`;
+                     }
+
+                     if (r.lastDeparture) {
+                        const depT = new Date(r.lastDeparture);
+                        const diff = Math.floor((depT.getTime() - sEnd.getTime()) / 60000);
+                        if (diff > 0) departureDiffHtml = `<div style="color:#1d4ed8; font-size:9px; font-weight:800; text-transform:uppercase;">⚡ ${diff} min extra</div>`;
+                        else departureDiffHtml = `<div style="color:#b91c1c; font-size:9px; font-weight:800; text-transform:uppercase;">❌ ${Math.abs(diff)} min menos</div>`;
+                     }
+                  }
 
                   return `
                   <tr style="border-bottom:1px solid #f1f5f9; transition: background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
@@ -1281,12 +1327,14 @@ const render = () => {
                         ${formatTime(r.firstArrival)}
                         ${mapLink(r.gpsArrival)}
                       </div>
+                      ${arrivalDiffHtml}
                     </td>
                     <td style="padding:18px;">
                       <div style="display:flex; align-items:center;">
                         ${formatTime(r.lastDeparture)}
                         ${mapLink(r.gpsDeparture)}
                       </div>
+                      ${departureDiffHtml}
                     </td>
                     <td style="padding:18px;">${statusBadge}</td>
                   </tr>
