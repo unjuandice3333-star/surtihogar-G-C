@@ -1130,12 +1130,67 @@ const render = () => {
   }
 
   else if (state.view === 'logs') {
+    // UNIFICACIÓN DE INTELIGENCIA CORPORATIVA: El panel general de auditoría ahora también usa el motor avanzado de agrupamiento
+    const attMap = {};
+    
+    state.systemLogs.filter(l => l.type === 'GEOLOCATION_TRACK').forEach(l => {
+      if (!l.timestamp || !l.users) return;
+      
+      let msgText = '';
+      let context = null;
+      try {
+        const parsed = JSON.parse(l.message);
+        msgText = parsed.text || '';
+        context = parsed.context;
+      } catch(e) { msgText = l.message || ''; }
+      
+      const isArr = msgText.includes('LLEGADA');
+      const d = new Date(l.timestamp);
+      
+      const yr = d.getFullYear();
+      const mt = String(d.getMonth() + 1).padStart(2, '0');
+      const dy = String(d.getDate()).padStart(2, '0');
+      const dateKey = `${yr}-${mt}-${dy}`;
+      
+      const uName = l.users.name || l.users[0]?.name || 'Desconocido';
+      const userId = l.user_id || l.users.id;
+      const groupKey = `${userId}_${dateKey}`;
+      
+      if (!attMap[groupKey]) {
+        attMap[groupKey] = {
+          user: uName,
+          userId: userId,
+          dateDisplay: d.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' }),
+          dateKey: dateKey,
+          rawDate: d,
+          firstArrival: null,
+          lastDeparture: null,
+          gpsArrival: null,
+          gpsDeparture: null
+        };
+      }
+      
+      if (isArr) {
+        if (!attMap[groupKey].firstArrival || d < new Date(attMap[groupKey].firstArrival)) {
+          attMap[groupKey].firstArrival = l.timestamp;
+          if (context?.coords) attMap[groupKey].gpsArrival = context.coords;
+        }
+      } else {
+        if (!attMap[groupKey].lastDeparture || d > new Date(attMap[groupKey].lastDeparture)) {
+          attMap[groupKey].lastDeparture = l.timestamp;
+          if (context?.coords) attMap[groupKey].gpsDeparture = context.coords;
+        }
+      }
+    });
+
+    const rows = Object.values(attMap).sort((a,b) => b.rawDate - a.rawDate);
+
     html = `
       <header class="main-header">
         <div class="logo-container">
-          <div class="logo-icon"><i data-lucide="clipboard-list"></i></div>
+          <div class="logo-icon" style="background:var(--primary); color:white;"><i data-lucide="clipboard-list"></i></div>
           <div class="header-title">
-            <p class="role-tag" style="margin:0;">AUDITORÍA</p>
+            <p class="role-tag" style="margin:0; background:rgba(59,130,246,0.2); color:var(--primary);">AUDITORÍA PROFESIONAL</p>
             <h1>Registros del Sistema</h1>
           </div>
         </div>
@@ -1144,50 +1199,89 @@ const render = () => {
         </div>
       </header>
 
-      <div class="container">
-        <div class="card" style="padding:0; overflow:hidden;">
-          <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
-            <thead>
-              <tr style="background:#f8fafc; border-bottom:1px solid #f1f5f9;">
-                <th style="padding:15px; color:var(--text-muted);">Fecha</th>
-                <th style="padding:15px; color:var(--text-muted);">Mensaje</th>
-                <th style="padding:15px; color:var(--text-muted); text-align:right;">Alerta</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${state.systemLogs.length === 0 ? '<tr><td colspan="3" style="padding:40px; text-align:center; color:#94a3b8;">Sin registros recientes</td></tr>' : state.systemLogs.map(l => {
-                let text = l.message || '';
-                let ctx = null;
-                try {
-                  const parsed = JSON.parse(text);
-                  text = parsed.text;
-                  ctx = parsed.context;
-                } catch(e) {}
-                
-                return `
-                <tr style="border-bottom:1px solid #f1f5f9;">
-                  <td style="padding:15px; white-space:nowrap; color:var(--text-muted);">
-                    ${l.timestamp ? new Date(l.timestamp).toLocaleDateString() : 'N/A'}
-                    <div style="font-size:10px; font-weight:600; color:#94a3b8; margin-top:2px;">${l.timestamp ? new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : ''}</div>
-                  </td>
-                  <td style="padding:15px; font-weight:500;">
-                    ${text}
-                    ${l.users ? `<div style="font-size:11px; color:var(--primary); font-weight:700; margin-top:3px;">👤 ${l.users.name}</div>` : ''}
-                    ${l.type === 'GEOLOCATION_TRACK' && ctx?.coords ? `
-                      <a href="https://www.google.com/maps?q=${ctx.coords.lat},${ctx.coords.lng}" target="_blank" style="display:inline-flex; align-items:center; gap:4px; margin-top:8px; font-size:10px; font-weight:800; background:rgba(16,185,129,0.1); color:#10b981; padding:6px 10px; border-radius:10px; text-decoration:none; border:1px solid rgba(16,185,129,0.2);">
-                        📍 VER UBICACIÓN
-                      </a>
-                    ` : ''}
-                  </td>
-                  <td style="padding:15px; text-align:right;">
-                    <span style="padding:4px 8px; border-radius:6px; background:${l.type === 'SECURITY_ALERT' ? 'rgba(239,68,68,0.1)' : (l.type === 'GEOLOCATION_TRACK' ? 'rgba(59,130,246,0.1)' : '#f1f5f9')}; color:${l.type === 'SECURITY_ALERT' ? 'var(--danger)' : (l.type === 'GEOLOCATION_TRACK' ? '#3b82f6' : '#64748b')}; font-size:10px; font-weight:800;">
-                      ${l.type === 'GEOLOCATION_TRACK' ? 'ASISTENCIA' : l.type}
-                    </span>
-                  </td>
+      <div class="container" style="max-width:1200px;">
+        <div class="card" style="padding:0; overflow:hidden; border-radius:16px;">
+          <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
+              <thead>
+                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
+                  <th style="padding:18px 20px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Empleado / Fecha</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Horario Programado</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Entrada Real</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Salida Real</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Estado Operativo</th>
                 </tr>
-              `}).join('')}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                ${rows.length === 0 ? `
+                  <tr><td colspan="5" style="padding:60px; text-align:center; color:#94a3b8; font-size:14px;">
+                    <div style="font-size:30px; margin-bottom:10px;">📅</div> No hay marcaciones disponibles.
+                  </td></tr>
+                ` : rows.map(r => {
+                  const scheduled = state.shifts.find(s => {
+                    if (s.user_id !== r.userId) return false;
+                    const sDate = new Date(s.start_time);
+                    const sYr = sDate.getFullYear();
+                    const sMt = String(sDate.getMonth() + 1).padStart(2, '0');
+                    const sDy = String(sDate.getDate()).padStart(2, '0');
+                    return `${sYr}-${sMt}-${sDy}` === r.dateKey;
+                  });
+
+                  let scheduledText = '<span style="color:#94a3b8; font-style:italic;">Sin programar</span>';
+                  let statusBadge = '';
+                  
+                  if (scheduled) {
+                    const sStart = new Date(scheduled.start_time);
+                    const sEnd = new Date(scheduled.end_time);
+                    scheduledText = `<div style="font-weight:700; color:#334155;">${sStart.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - ${sEnd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>`;
+                    
+                    if (r.firstArrival) {
+                       const arrTime = new Date(r.firstArrival);
+                       const isLate = arrTime > new Date(sStart.getTime() + (10 * 60000));
+                       statusBadge = isLate 
+                         ? `<span style="background:#fffbeb; color:#b45309; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #fef3c7;">⏰ TARDE</span>`
+                         : `<span style="background:#f0fdf4; color:#166534; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dcfce7;">✅ A TIEMPO</span>`;
+                    }
+                  }
+
+                  if (!statusBadge) {
+                    statusBadge = r.lastDeparture 
+                      ? `<span style="background:#f1f5f9; color:#475569; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px;">FINALIZADO</span>`
+                      : `<span style="background:#eff6ff; color:#1d4ed8; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dbeafe;">🟢 ACTIVO</span>`;
+                  }
+
+                  const formatTime = (ts) => ts ? `<div style="font-weight:800; font-size:14px; color:#1e293b;">${new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : '<div style="color:#cbd5e1;">--:--</div>';
+                  
+                  const mapLink = (coords) => coords ? `
+                    <a href="https://www.google.com/maps?q=${coords.lat},${coords.lng}" target="_blank" style="color:#10b981; display:inline-flex; align-items:center; margin-left:8px;" title="GPS"><i data-lucide="map-pin" style="width:12px;"></i></a>
+                  ` : '';
+
+                  return `
+                  <tr style="border-bottom:1px solid #f1f5f9; transition: background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+                    <td style="padding:18px 20px;">
+                      <div style="font-weight:800; color:var(--primary); font-size:13px;">${r.user}</div>
+                      <div style="font-size:11px; color:#64748b; font-weight:600; text-transform: capitalize; margin-top:2px;">📅 ${r.dateDisplay}</div>
+                    </td>
+                    <td style="padding:18px;">${scheduledText}</td>
+                    <td style="padding:18px;">
+                      <div style="display:flex; align-items:center;">
+                        ${formatTime(r.firstArrival)}
+                        ${mapLink(r.gpsArrival)}
+                      </div>
+                    </td>
+                    <td style="padding:18px;">
+                      <div style="display:flex; align-items:center;">
+                        ${formatTime(r.lastDeparture)}
+                        ${mapLink(r.gpsDeparture)}
+                      </div>
+                    </td>
+                    <td style="padding:18px;">${statusBadge}</td>
+                  </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     `;
@@ -1855,8 +1949,16 @@ const render = () => {
 
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:12px; margin-bottom:25px;">
           ${state.user?.role !== 'admin' ? `
-            <button onclick="window.registerGeolocation('arrival')" class="btn-primary" style="padding:15px; background:#10b981;">📍 LLEGADA</button>
-            <button onclick="window.registerGeolocation('departure')" class="btn-primary" style="padding:15px; background:#ef4444;">📍 SALIDA</button>
+            <button onclick="window.registerGeolocation('arrival')" class="btn-primary" 
+              style="padding:15px; background:${state.hasActiveAttendance ? '#94a3b8' : '#10b981'}; opacity:${state.hasActiveAttendance ? '0.5' : '1'}; cursor:${state.hasActiveAttendance ? 'not-allowed' : 'pointer'};"
+              ${state.hasActiveAttendance ? 'disabled' : ''}>
+              📍 LLEGADA
+            </button>
+            <button onclick="window.registerGeolocation('departure')" class="btn-primary" 
+              style="padding:15px; background:${!state.hasActiveAttendance ? '#94a3b8' : '#ef4444'}; opacity:${!state.hasActiveAttendance ? '0.5' : '1'}; cursor:${!state.hasActiveAttendance ? 'not-allowed' : 'pointer'};"
+              ${!state.hasActiveAttendance ? 'disabled' : ''}>
+              📍 SALIDA
+            </button>
           ` : ''}
           <button onclick="window.openPos()" class="btn-primary" style="padding:15px; background:var(--secondary);">+ VENTA (POS)</button>
           <button onclick="window.openModal('expense')" class="btn-primary" style="padding:15px;">+ GASTO</button>
@@ -3169,11 +3271,21 @@ window.registerGeolocation = async (type) => {
     return;
   }
 
+  // REGLA DE NEGOCIO MAESTRA: Impedir duplicados o salidas sin entrada previa usando el estado sincronizado global
+  if (type === 'arrival' && state.hasActiveAttendance) {
+    window.showToast("⚠️ Ya tienes un registro de LLEGADA activo. Marca SALIDA primero para cerrar tu turno.", "warning");
+    return;
+  }
+  if (type === 'departure' && !state.hasActiveAttendance) {
+    window.showToast("⚠️ No puedes registrar SALIDA sin haber registrado una LLEGADA previa.", "warning");
+    return;
+  }
+
   state.loading = true;
   render();
 
   try {
-    // Validación de reglas de asistencia secuencial (Llegada sin Salida)
+    // Validación de respaldo offline...
     if (navigator.onLine) {
       try {
         const { data: lastLog } = await supabase
