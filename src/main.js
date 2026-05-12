@@ -119,14 +119,27 @@ window.fetchData = async () => {
     state.activeShiftBusinessId = activeShift?.business_id || (state.hasActiveAttendance ? state.user?.business_id : null);
     state.currentBusinessId = state.activeShiftBusinessId || state.user?.business_id || 'all';
 
-    // 7. Carga de productos (Al final, ya con el negocio definitivo)
-    let prodQuery = supabase.from('products').select('*').order('name');
+    // 7. Carga de productos (Agrupación Inteligente para Clúster Centralizado)
+    let prodQuery = supabase.from('products').select('*, businesses(name)').order('name');
     const finalFilterId = state.activeShiftBusinessId || (state.currentBusinessId !== 'all' ? state.currentBusinessId : null);
     
     if (finalFilterId) {
-      prodQuery = prodQuery.eq('business_id', finalFilterId);
+       const activeBiz = state.businesses.find(b => b.id === finalFilterId);
+       const isCentralHub = activeBiz?.name?.toLowerCase().includes('electro');
+
+       if (isCentralHub) {
+          // Si el usuario está en Electrodomésticos, habilitamos ventas unificadas de Muebles, Pañalera (ropa niños), etc.
+          const clusterKeywords = ['electro', 'mueble', 'ropa niñ', 'baratillo', 'pañalera'];
+          const clusterIds = state.businesses
+            .filter(b => clusterKeywords.some(kw => b.name?.toLowerCase().includes(kw)))
+            .map(b => b.id);
+          
+          prodQuery = prodQuery.in('business_id', clusterIds);
+       } else {
+          prodQuery = prodQuery.eq('business_id', finalFilterId);
+       }
     } else if (state.user.role !== 'admin' && state.user.business_id) {
-      prodQuery = prodQuery.eq('business_id', state.user.business_id);
+       prodQuery = prodQuery.eq('business_id', state.user.business_id);
     }
     
     const { data: prodData } = await prodQuery;
@@ -2509,27 +2522,30 @@ window.finalizeSale = async () => {
     const { error: itemsErr } = await supabase.from('sale_items').insert(saleItems);
     if (itemsErr) throw itemsErr;
 
-    // 3. Crear Transacción Contable
-    let saleBusId = state.activeShiftBusinessId || state.user.business_id;
-    if (!saleBusId && state.businesses.length > 0) {
-      saleBusId = state.businesses[0].id; 
-      console.warn("Fallback negocio:", saleBusId);
-    }
-    
-    if (saleBusId) {
-      const ventaCat = state.categories.find(c => c.name === 'Venta' && c.type === 'income');
-      const { error: trxErr } = await supabase.from('transactions').insert({
-        amount: total,
-        type: 'income',
-        category_id: ventaCat ? ventaCat.id : null,
-        business_id: saleBusId,
-        user_id: state.user.id,
-        date: new Date().toISOString(),
-        payment_method: pm,
-        note: `[Venta POS #${sale.id.slice(0,5)}] Método: ${pm}`
-      });
+    // 3. Crear Transacciones Contables Inteligentes (División por Negocio)
+    const totalsByBusiness = {};
+    state.cart.forEach(item => {
+       const bId = item.business_id || state.activeShiftBusinessId || state.user.business_id || (state.businesses.length > 0 ? state.businesses[0].id : null);
+       if (bId) {
+          totalsByBusiness[bId] = (totalsByBusiness[bId] || 0) + (item.price * item.quantity);
+       }
+    });
 
-      if (trxErr) {
+    const ventaCat = state.categories.find(c => c.name === 'Venta' && c.type === 'income');
+    const transactionRows = Object.entries(totalsByBusiness).map(([bizId, subTotal]) => ({
+       amount: subTotal,
+       type: 'income',
+       category_id: ventaCat ? ventaCat.id : null,
+       business_id: bizId,
+       user_id: state.user.id,
+       date: new Date().toISOString(),
+       payment_method: pm,
+       note: `[Venta POS #${sale.id.slice(0,5)}] Clúster Centralizado. Mét: ${pm}`
+    }));
+
+    if (transactionRows.length > 0) {
+       const { error: trxErr } = await supabase.from('transactions').insert(transactionRows);
+       if (trxErr) {
         console.error("Error al registrar dinero:", trxErr);
         window.showToast("⚠️ Venta guardada, pero hubo un error en el balance: " + trxErr.message, "warning");
       }
@@ -3217,6 +3233,7 @@ window.renderPosProducts = () => {
   return filtered.map(p => `
     <div class="card" onclick="window.addToCart('${p.id}')" style="cursor:pointer; padding:15px; display:flex; flex-direction:column; justify-content:space-between; transition:transform 0.1s; border:1px solid #e2e8f0;">
       <div>
+        <span style="display:inline-block; font-size:9px; font-weight:800; text-transform:uppercase; color:#4f46e5; background:#e0e7ff; padding:3px 8px; border-radius:6px; margin-bottom:8px; border:1px solid #c7d2fe;">🏬 ${p.businesses?.name || 'Sin asignar'}</span>
         <p style="font-weight:700; font-size:15px; margin-bottom:5px;">${p.name}</p>
         <p style="color:var(--text-muted); font-size:12px;">Stock: <span style="color:${p.stock < 5 ? 'var(--danger)' : 'var(--success)'}; font-weight:700;">${p.stock}</span></p>
       </div>
