@@ -4,6 +4,10 @@ import { SupplierService } from './services/SupplierService'
 import { DatabaseService } from './services/DatabaseService'
 import { Geolocation } from '@capacitor/geolocation'
 
+// Centralización de Filtros (Mejores Prácticas DRY)
+const RENTAL_BUSINESSES = ['Billar', 'Droguería', 'Local ropa', 'Restaurante'];
+const TEST_BUSINESSES = ['Mi Primer Negocio', 'Mi Negocio Principal'];
+
 const state = {
   user: null,
   businesses: [],
@@ -32,14 +36,19 @@ const state = {
   pendingProducts: [],
   payrollData: null,
   qaResults: [],
-  editingRateUser: null
+  editingRateUser: null,
+  posPaymentMethod: 'Efectivo'
 };
 
 window.fetchData = async () => {
   try {
     state.loading = true;
     
-    // 1. Verificar Sesión primero
+    // 1. Cargar Negocios (requerido para el selector de registro público)
+    const { data: busRes } = await supabase.from('businesses').select('id, name');
+    state.businesses = busRes || [];
+
+    // 2. Verificar Sesión
     const { data: { session } } = await supabase.auth.getSession();
     if (!session) { 
       if (state.view !== 'register') state.view = 'auth'; 
@@ -48,14 +57,10 @@ window.fetchData = async () => {
       return; 
     }
 
-    // 2. Cargar Perfil y Negocios en paralelo
-    const [busRes, profRes] = await Promise.all([
-      supabase.from('businesses').select('*'),
-      supabase.from('users').select('*').eq('id', session.user.id).maybeSingle()
-    ]);
+    // 3. Cargar Perfil del Usuario logueado
+    const { data: profRes } = await supabase.from('users').select('*').eq('id', session.user.id).maybeSingle();
     
-    state.businesses = busRes.data || [];
-    state.user = profRes.data || { id: session.user.id, name: 'Admin', role: 'admin' };
+    state.user = profRes || { id: session.user.id, name: 'Admin', role: 'admin' };
 
     // 3. Determinar Negocio Actual antes de seguir
     // (Aún no tenemos turnos, así que usamos el del perfil como fallback temporal)
@@ -85,8 +90,21 @@ window.fetchData = async () => {
       state.saleItems = itemsRes.data || [];
       state.pendingProducts = pendingRes.data || [];
     } else {
-      const { data: userShifts } = await supabase.from('shifts').select('*').eq('user_id', session.user.id);
-      state.shifts = userShifts || [];
+      const [shRes, attRes] = await Promise.all([
+        supabase.from('shifts').select('*').eq('user_id', session.user.id),
+        supabase.from('system_logs').select('message').eq('user_id', session.user.id).eq('type', 'GEOLOCATION_TRACK').order('timestamp', { ascending: false }).limit(1)
+      ]);
+      state.shifts = shRes.data || [];
+      
+      // Validar si hay un turno físico activo por GPS
+      let hasGeoActive = false;
+      try {
+        if (attRes.data?.[0]) {
+          const msg = JSON.parse(attRes.data[0].message);
+          if (msg.text && msg.text.includes('LLEGADA')) hasGeoActive = true;
+        }
+      } catch(e) {}
+      state.hasActiveAttendance = hasGeoActive;
     }
 
     // 6. Actualizar Turno Activo y Negocio Definitivo
@@ -97,7 +115,8 @@ window.fetchData = async () => {
       return nowLocal >= new Date(start.getTime() - 60000) && nowLocal <= end;
     });
 
-    state.activeShiftBusinessId = activeShift?.business_id || null;
+    // Prioridad: Se aprueba por Horario Programado O por Marcación Real de Asistencia (GPS)
+    state.activeShiftBusinessId = activeShift?.business_id || (state.hasActiveAttendance ? state.user?.business_id : null);
     state.currentBusinessId = state.activeShiftBusinessId || state.user?.business_id || 'all';
 
     // 7. Carga de productos (Al final, ya con el negocio definitivo)
@@ -185,15 +204,14 @@ window.updateModalBusinesses = (catId) => {
   const cat = state.categories.find(c => c.id === catId);
   if (!cat) return;
 
-  const arriendoNames = ['Billar', 'Droguería', 'Local ropa', 'Restaurante'];
   let filteredBusinesses = [];
 
   // Lógica: Arriendo vs Operativos
   if (cat.name === 'Arriendo') {
-    filteredBusinesses = state.businesses.filter(b => arriendoNames.includes(b.name));
+    filteredBusinesses = state.businesses.filter(b => RENTAL_BUSINESSES.includes(b.name));
   } else {
     // Para cualquier otra categoría (Venta, Compra, Gasto, etc.)
-    filteredBusinesses = state.businesses.filter(b => !arriendoNames.includes(b.name) && b.name !== 'Mi Primer Negocio' && b.name !== 'Mi Negocio Principal');
+    filteredBusinesses = state.businesses.filter(b => !RENTAL_BUSINESSES.includes(b.name) && !TEST_BUSINESSES.includes(b.name));
   }
 
   busSelect.innerHTML = '<option value="">Selecciona negocio...</option>' + 
@@ -567,7 +585,10 @@ const render = () => {
           <input type="email" class="form-input" placeholder="Email" autocomplete="email" required style="margin-bottom:12px;">
           <input type="password" class="form-input" placeholder="Clave" autocomplete="new-password" required style="margin-bottom:12px;">
           <select class="form-input" style="margin-bottom:12px;">
-            ${state.businesses.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}
+            <option value="" disabled selected>Selecciona tu Negocio...</option>
+            ${state.businesses
+              .filter(b => !TEST_BUSINESSES.includes(b.name) && !RENTAL_BUSINESSES.includes(b.name))
+              .map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}
           </select>
           <button class="btn-primary" style="width:100%;" ${state.loading ? 'disabled' : ''}>
             ${state.loading ? 'REGISTRANDO...' : 'REGISTRAR'}
@@ -662,18 +683,28 @@ const render = () => {
           <div style="padding:20px; background:#f8fafc; border-top:1px solid #e2e8f0;">
             <div style="margin-bottom:15px;">
               <label style="font-size:11px; font-weight:700; color:var(--text-muted); display:block; margin-bottom:5px; text-transform:uppercase;">Forma de Pago</label>
-              <select id="pos-payment-method" class="form-input" style="width:100%; height:45px; padding:10px; border-radius:12px; font-size:14px; font-weight:700; background:white; border:1px solid #cbd5e1;">
-                <option value="Efectivo">💵 Efectivo</option>
-                <option value="Addi">💳 Addi</option>
-                <option value="Sistecredito">💳 Sistecredito</option>
-                <option value="Llano Gas">🔥 Llano Gas</option>
+              <select id="pos-payment-method" class="form-input" onchange="state.posPaymentMethod = this.value" style="width:100%; height:45px; padding:10px; border-radius:12px; font-size:14px; font-weight:700; background:white; border:1px solid #cbd5e1;">
+                <option value="Efectivo" ${state.posPaymentMethod === 'Efectivo' ? 'selected' : ''}>💵 Efectivo</option>
+                <option value="Addi" ${state.posPaymentMethod === 'Addi' ? 'selected' : ''}>💳 Addi</option>
+                <option value="Sistecredito" ${state.posPaymentMethod === 'Sistecredito' ? 'selected' : ''}>💳 Sistecredito</option>
+                <option value="Llano Gas" ${state.posPaymentMethod === 'Llano Gas' ? 'selected' : ''}>🔥 Llano Gas</option>
               </select>
             </div>
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
               <span style="font-weight:600;">TOTAL</span>
               <span style="font-size:24px; font-weight:800; color:var(--primary);">${formatCurrency(cartTotal)}</span>
             </div>
-            <button onclick="window.finalizeSale()" class="btn-primary" style="width:100%; height:60px; font-size:18px; border-radius:15px;" ${state.cart.length === 0 ? 'disabled' : ''}>FINALIZAR VENTA</button>
+            
+            ${(!state.activeShiftBusinessId && state.user?.role !== 'admin') ? `
+              <div style="background:#fee2e2; color:#991b1b; padding:10px; border-radius:10px; font-size:12px; text-align:center; font-weight:700; margin-bottom:10px;">
+                ⚠️ TURNO INACTIVO: Activa tu asistencia para poder vender.
+              </div>
+              <button disabled class="btn-primary" style="width:100%; height:60px; font-size:18px; border-radius:15px; opacity:0.5; cursor:not-allowed;">BLOQUEADO</button>
+            ` : `
+              <button onclick="window.finalizeSale()" class="btn-primary" style="width:100%; height:60px; font-size:18px; border-radius:15px;" ${state.cart.length === 0 || state.loading ? 'disabled' : ''}>
+                ${state.loading ? 'PROCESANDO...' : 'FINALIZAR VENTA'}
+              </button>
+            `}
           </div>
         </div>
       </div>
@@ -934,14 +965,69 @@ const render = () => {
   }
 
   else if (state.view === 'attendance_admin') {
-    const attendanceLogs = state.systemLogs.filter(l => l.type === 'GEOLOCATION_TRACK');
+    // 1. AGRUPACIÓN PROFESIONAL DE LOGS POR DÍA Y USUARIO
+    const attMap = {};
+    
+    state.systemLogs.filter(l => l.type === 'GEOLOCATION_TRACK').forEach(l => {
+      if (!l.timestamp || !l.users) return;
+      
+      let msgText = '';
+      let context = null;
+      try {
+        const parsed = JSON.parse(l.message);
+        msgText = parsed.text || '';
+        context = parsed.context;
+      } catch(e) { msgText = l.message || ''; }
+      
+      const isArr = msgText.includes('LLEGADA');
+      const d = new Date(l.timestamp);
+      
+      // Agrupar por fecha YYYY-MM-DD
+      const yr = d.getFullYear();
+      const mt = String(d.getMonth() + 1).padStart(2, '0');
+      const dy = String(d.getDate()).padStart(2, '0');
+      const dateKey = `${yr}-${mt}-${dy}`;
+      
+      const uName = l.users.name || l.users[0]?.name || 'Desconocido';
+      const userId = l.user_id || l.users.id;
+      const groupKey = `${userId}_${dateKey}`;
+      
+      if (!attMap[groupKey]) {
+        attMap[groupKey] = {
+          user: uName,
+          userId: userId,
+          dateDisplay: d.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' }),
+          dateKey: dateKey,
+          rawDate: d,
+          firstArrival: null,
+          lastDeparture: null,
+          gpsArrival: null,
+          gpsDeparture: null
+        };
+      }
+      
+      if (isArr) {
+        if (!attMap[groupKey].firstArrival || d < new Date(attMap[groupKey].firstArrival)) {
+          attMap[groupKey].firstArrival = l.timestamp;
+          if (context?.coords) attMap[groupKey].gpsArrival = context.coords;
+        }
+      } else {
+        if (!attMap[groupKey].lastDeparture || d > new Date(attMap[groupKey].lastDeparture)) {
+          attMap[groupKey].lastDeparture = l.timestamp;
+          if (context?.coords) attMap[groupKey].gpsDeparture = context.coords;
+        }
+      }
+    });
+
+    const rows = Object.values(attMap).sort((a,b) => b.rawDate - a.rawDate);
+
     html = `
       <header class="main-header">
         <div class="logo-container">
-          <div class="logo-icon" style="background:#10b981; color:white;"><i data-lucide="map-pin"></i></div>
+          <div class="logo-icon" style="background:var(--primary); color:white;"><i data-lucide="calendar-check"></i></div>
           <div class="header-title">
-            <p class="role-tag" style="margin:0; background:rgba(16,185,129,0.2); color:#10b981;">ASISTENCIA</p>
-            <h1>Reporte de GPS</h1>
+            <p class="role-tag" style="margin:0; background:rgba(59,130,246,0.2); color:var(--primary);">AUDITORÍA DE PERSONAL</p>
+            <h1>Consolidado de Asistencia</h1>
           </div>
         </div>
         <div class="header-actions">
@@ -949,58 +1035,95 @@ const render = () => {
         </div>
       </header>
 
-      <div class="container" style="max-width:1000px;">
-        <div class="card" style="padding:0; overflow:hidden;">
-          <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
-            <thead>
-              <tr style="background:#f8fafc; border-bottom:1px solid #f1f5f9;">
-                <th style="padding:15px; color:var(--text-muted);">Colaborador</th>
-                <th style="padding:15px; color:var(--text-muted);">Fecha / Hora</th>
-                <th style="padding:15px; color:var(--text-muted);">Tipo</th>
-                <th style="padding:15px; color:var(--text-muted); text-align:right;">Ubicación GPS</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${attendanceLogs.length === 0 ? '<tr><td colspan="4" style="padding:40px; text-align:center; color:#94a3b8;">Sin registros de asistencia recientes</td></tr>' : attendanceLogs.map(l => {
-                let text = l.message || '';
-                let ctx = null;
-                try {
-                  const parsed = JSON.parse(text);
-                  text = parsed.text;
-                  ctx = parsed.context;
-                } catch(e) {}
-                
-                const isArrival = text.includes('LLEGADA');
-                let coords = null;
-                if (ctx && ctx.coords) coords = ctx.coords;
-                const userName = l.users ? (l.users.name || l.users[0]?.name || 'Desconocido') : 'Desconocido';
-                
-                return `
-                <tr style="border-bottom:1px solid #f1f5f9;">
-                  <td style="padding:15px; font-weight:800; color:var(--primary); font-size:14px; display:flex; align-items:center; gap:10px;">
-                    <div style="width:30px; height:30px; border-radius:50%; background:rgba(59,130,246,0.1); display:flex; align-items:center; justify-content:center; color:var(--primary);"><i data-lucide="user" style="width:16px;"></i></div>
-                    ${userName}
-                  </td>
-                  <td style="padding:15px; white-space:nowrap;">
-                    <span style="font-weight:700; color:#1e293b;">${l.timestamp ? new Date(l.timestamp).toLocaleDateString() : 'N/A'}</span>
-                    <div style="font-size:11px; font-weight:600; color:#64748b; margin-top:3px;">${l.timestamp ? new Date(l.timestamp).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : 'N/A'}</div>
-                  </td>
-                  <td style="padding:15px;">
-                    <span style="padding:6px 10px; border-radius:8px; background:${isArrival ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'}; color:${isArrival ? '#10b981' : '#ef4444'}; font-size:11px; font-weight:800;">
-                      ${isArrival ? '📍 LLEGADA' : '📍 SALIDA'}
-                    </span>
-                  </td>
-                  <td style="padding:15px; text-align:right;">
-                    ${coords && coords.lat ? `
-                      <a href="https://www.google.com/maps?q=${coords.lat},${coords.lng}" target="_blank" style="display:inline-flex; align-items:center; gap:6px; font-size:11px; font-weight:800; background:#10b981; color:white; padding:8px 12px; border-radius:10px; text-decoration:none; box-shadow:0 4px 10px rgba(16,185,129,0.2); transition:transform 0.1s;">
-                        VER EN MAPA
-                      </a>
-                    ` : '<span style="color:var(--text-muted);">Sin GPS</span>'}
-                  </td>
+      <div class="container" style="max-width:1200px;">
+        <div class="card" style="padding:0; overflow:hidden; border-radius:16px;">
+          <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
+              <thead>
+                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
+                  <th style="padding:18px 20px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Empleado / Fecha</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Horario Programado</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Entrada Real</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Salida Real</th>
+                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Estado / GPS</th>
                 </tr>
-              `}).join('')}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                ${rows.length === 0 ? `
+                  <tr><td colspan="5" style="padding:60px; text-align:center; color:#94a3b8; font-size:14px;">
+                    <div style="font-size:30px; margin-bottom:10px;">📅</div> No se encontraron marcaciones consolidadas.
+                  </td></tr>
+                ` : rows.map(r => {
+                  // Buscar si hay un turno programado en el calendario para ese día exacto
+                  const scheduled = state.shifts.find(s => {
+                    if (s.user_id !== r.userId) return false;
+                    const sDate = new Date(s.start_time);
+                    const sYr = sDate.getFullYear();
+                    const sMt = String(sDate.getMonth() + 1).padStart(2, '0');
+                    const sDy = String(sDate.getDate()).padStart(2, '0');
+                    return `${sYr}-${sMt}-${sDy}` === r.dateKey;
+                  });
+
+                  let scheduledText = '<span style="color:#94a3b8; font-style:italic;">Sin asignar</span>';
+                  let statusBadge = '';
+                  
+                  if (scheduled) {
+                    const sStart = new Date(scheduled.start_time);
+                    const sEnd = new Date(scheduled.end_time);
+                    scheduledText = `<div style="font-weight:700; color:#334155;">${sStart.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - ${sEnd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>`;
+                    
+                    if (r.firstArrival) {
+                       const arrTime = new Date(r.firstArrival);
+                       // Tolerancia de 10 minutos
+                       const isLate = arrTime > new Date(sStart.getTime() + (10 * 60000));
+                       statusBadge = isLate 
+                         ? `<span style="background:#fffbeb; color:#b45309; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #fef3c7;">⏰ TARDE</span>`
+                         : `<span style="background:#f0fdf4; color:#166534; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dcfce7;">✅ A TIEMPO</span>`;
+                    }
+                  }
+
+                  if (!statusBadge) {
+                    statusBadge = r.lastDeparture 
+                      ? `<span style="background:#f1f5f9; color:#475569; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px;">REGISTRADO</span>`
+                      : `<span style="background:#eff6ff; color:#1d4ed8; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dbeafe;">🟢 EN TURNO</span>`;
+                  }
+
+                  const formatTime = (ts) => ts ? `<div style="font-weight:800; font-size:14px; color:#1e293b;">${new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : '<div style="color:#cbd5e1; font-weight:500;">--:--</div>';
+                  
+                  const mapLink = (coords) => coords ? `
+                    <a href="https://www.google.com/maps?q=${coords.lat},${coords.lng}" target="_blank" style="color:#10b981; display:inline-flex; align-items:center; gap:4px; text-decoration:none; font-weight:800; margin-left:8px;" title="Ver Mapa"><i data-lucide="map-pin" style="width:12px;"></i></a>
+                  ` : '';
+
+                  return `
+                  <tr style="border-bottom:1px solid #f1f5f9; transition: background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+                    <td style="padding:18px 20px;">
+                      <div style="font-weight:800; color:var(--primary); font-size:13px;">${r.user}</div>
+                      <div style="font-size:11px; color:#64748b; font-weight:600; text-transform: capitalize; margin-top:2px;">📅 ${r.dateDisplay}</div>
+                    </td>
+                    <td style="padding:18px;">${scheduledText}</td>
+                    <td style="padding:18px;">
+                      <div style="display:flex; align-items:center;">
+                        ${formatTime(r.firstArrival)}
+                        ${mapLink(r.gpsArrival)}
+                      </div>
+                    </td>
+                    <td style="padding:18px;">
+                      <div style="display:flex; align-items:center;">
+                        ${formatTime(r.lastDeparture)}
+                        ${mapLink(r.gpsDeparture)}
+                      </div>
+                    </td>
+                    <td style="padding:18px;">
+                      <div style="display:flex; align-items:center; gap:8px;">
+                        ${statusBadge}
+                      </div>
+                    </td>
+                  </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     `;
@@ -1792,39 +1915,53 @@ const render = () => {
           </div>
         ` : `
           <form onsubmit="${state.activeModal === 'expense' ? 'window.saveExpense(event)' : `window.saveTransaction(event, '${state.activeModal === 'sale' ? 'income' : 'expense'}')`}">
-            ${state.activeModal === 'sale' ? `
-              <!-- Lógica especial para Ventas: Categoría define Negocio -->
-              <div class="form-group">
-                <label>Categoría</label>
-                <select id="modal-category-select" name="category" class="form-input" required onchange="window.updateModalBusinesses(this.value)">
-                  <option value="">Selecciona categoría...</option>
-                  ${state.categories
-                    .filter(c => c.type === 'income' && ['Venta', 'Arriendo'].includes(c.name))
-                    .map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
-                </select>
-              </div>
-              <div class="form-group">
-                <label>Negocio</label>
-                <select id="modal-business-select" name="business" class="form-input" required>
-                  <option value="">Primero selecciona una categoría...</option>
-                </select>
-              </div>
+            ${state.user?.role === 'admin' ? `
+              ${state.activeModal === 'sale' ? `
+                <div class="form-group">
+                  <label>Categoría</label>
+                  <select id="modal-category-select" name="category" class="form-input" required onchange="window.updateModalBusinesses(this.value)">
+                    <option value="">Selecciona categoría...</option>
+                    ${state.categories.filter(c => c.type === 'income' && ['Venta', 'Arriendo'].includes(c.name)).map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Negocio</label>
+                  <select id="modal-business-select" name="business" class="form-input" required>
+                    <option value="">Primero selecciona una categoría...</option>
+                  </select>
+                </div>
+              ` : `
+                <div class="form-group">
+                  <label>Categoría</label>
+                  <select id="modal-category-select" name="category" class="form-input" required onchange="window.updateModalBusinesses(this.value)">
+                    <option value="">Selecciona categoría...</option>
+                    ${state.categories.filter(c => c.type === 'expense').map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label>Negocio</label>
+                  <select id="modal-business-select" name="business" class="form-input" required>
+                    <option value="">Primero selecciona una categoría...</option>
+                  </select>
+                </div>
+              `}
             ` : `
-              <!-- Lógica para Gastos: Ahora también Categoría define Negocio -->
+              <!-- VISTA COLABORADOR: Auto-atribución por Turno Activo -->
               <div class="form-group">
                 <label>Categoría</label>
-                <select id="modal-category-select" name="category" class="form-input" required onchange="window.updateModalBusinesses(this.value)">
-                  <option value="">Selecciona categoría...</option>
+                <select id="modal-category-select" name="category" class="form-input" required>
                   ${state.categories
-                    .filter(c => c.type === 'expense')
+                    .filter(c => c.type === (state.activeModal === 'sale' ? 'income' : 'expense') && (state.activeModal === 'sale' ? c.name === 'Venta' : true))
                     .map(c => `<option value="${c.id}">${c.name}</option>`).join('')}
                 </select>
               </div>
               <div class="form-group">
-                <label>Negocio</label>
-                <select id="modal-business-select" name="business" class="form-input" required>
-                  <option value="">Primero selecciona una categoría...</option>
-                </select>
+                <label>Negocio (Automático)</label>
+                <div class="form-input" style="background:#f1f5f9; border-color:#e2e8f0; color:#475569; font-weight:700; display:flex; align-items:center;">
+                  🏢 ${state.businesses.find(b => b.id === state.activeShiftBusinessId)?.name || 'Negocio de Turno'}
+                </div>
+                <!-- Input oculto que lee el formulario al enviar -->
+                <input type="hidden" name="business" value="${state.activeShiftBusinessId}">
               </div>
             `}
             <div class="form-group"><label>Monto</label><input type="number" name="amount" class="form-input" placeholder="$ 0" required></div>
@@ -2173,31 +2310,23 @@ window.removeFromCart = (productId) => {
 window.finalizeSale = async () => {
   if (state.cart.length === 0) return;
   
-  const pm = document.getElementById('pos-payment-method')?.value || 'Efectivo';
+  const pm = state.posPaymentMethod || 'Efectivo';
   const total = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   
   try {
     state.loading = true;
     render();
 
-    // BLOQUEO DE SEGURIDAD: Solo Admin (God Mode) o COLABORADORs con TURNO ACTIVO
-    const isAdmin = state.user?.role === 'admin';
-    if (!isAdmin && state.user?.role !== 'admin' && !state.activeShiftBusinessId) {
-      window.showToast("⛔ ACCESO DENEGADO: Tu turno no está activo. Pide al Admin que lo inicie.", "danger");
-      state.loading = false;
-      render();
-      return;
-    }
-
     // 1. Create Sale
     const { data: sale, error: saleErr } = await supabase.from('sales').insert({
       user_id: state.user.id,
-      total: total
+      total: total,
+      payment_method: pm
     }).select().single();
 
     if (saleErr) throw saleErr;
 
-    // 2. Create Sale Items (Stock is updated via DB Triggers)
+    // 2. Create Sale Items
     const saleItems = state.cart.map(item => ({
       sale_id: sale.id,
       product_id: item.product_id,
@@ -2208,11 +2337,11 @@ window.finalizeSale = async () => {
     const { error: itemsErr } = await supabase.from('sale_items').insert(saleItems);
     if (itemsErr) throw itemsErr;
 
-    // 3. Crear Transacción Contable (Con Búsqueda de Negocio de Emergencia)
+    // 3. Crear Transacción Contable
     let saleBusId = state.activeShiftBusinessId || state.user.business_id;
     if (!saleBusId && state.businesses.length > 0) {
-      saleBusId = state.businesses[0].id; // Fallback al primer negocio
-      console.warn("COLABORADOR sin negocio, usando fallback:", saleBusId);
+      saleBusId = state.businesses[0].id; 
+      console.warn("Fallback negocio:", saleBusId);
     }
     
     if (saleBusId) {
@@ -2224,9 +2353,10 @@ window.finalizeSale = async () => {
         business_id: saleBusId,
         user_id: state.user.id,
         date: new Date().toISOString(),
-        description: `[Forma de Pago: ${pm}] Venta POS #${sale.id.slice(0,5)}`,
-        note: `[Forma de Pago: ${pm}] Venta POS #${sale.id.slice(0,5)}`
+        payment_method: pm,
+        note: `[Venta POS #${sale.id.slice(0,5)}] Método: ${pm}`
       });
+
       if (trxErr) {
         console.error("Error al registrar dinero:", trxErr);
         window.showToast("⚠️ Venta guardada, pero hubo un error en el balance: " + trxErr.message, "warning");
@@ -2487,44 +2617,56 @@ window.saveExpense = async (e) => {
     btn.innerHTML = '<span class="loading-spinner"></span> GUARDANDO...';
     
     const formData = new FormData(e.target);
-    const amount = formData.get('amount');
+    const rawAmount = formData.get('amount');
     const categoryId = formData.get('category');
-    const category = state.categories.find(c => c.id === categoryId)?.name || 'General';
-    const description = formData.get('business'); // Usamos el negocio como descripción o contexto
+    const businessId = formData.get('business') || state.activeShiftBusinessId;
+
+    // Sanitización Profesional del Monto
+    const cleanAmount = typeof rawAmount === 'string' ? rawAmount.replace(/\./g, '').replace(',', '.') : rawAmount;
+    const parsedAmount = parseFloat(cleanAmount);
+
+    if (!parsedAmount || parsedAmount <= 0) {
+      throw new Error("El monto ingresado no es válido.");
+    }
+
+    if (!businessId) {
+      throw new Error("No se detectó una sede o turno activo para este gasto.");
+    }
+
     const photoFile = formData.get('photo');
 
+    // Subida de Foto Profesional (Si existe)
     let photoUrl = null;
     if (photoFile && photoFile.size > 0) {
+      btn.innerHTML = '<span class="loading-spinner"></span> SUBIENDO FOTO...';
       photoUrl = await window.uploadPhoto(photoFile, 'expenses');
     }
 
-    const { error } = await supabase.from('expenses').insert({
-      amount: parseFloat(amount),
-      category: category,
-      description: `Negocio: ${description}`,
-      image_url: photoUrl
-    });
+    btn.innerHTML = '<span class="loading-spinner"></span> REGISTRANDO CONTABILIDAD...';
 
-    if (error) throw error;
-    
-    // También guardamos en transactions para mantener el balance del dashboard actual (Opcional, depende de si migramos todo el dashboard)
-    await supabase.from('transactions').insert({
-      amount: parseFloat(amount),
+    // REGISTRO DEFINITIVO EN LIBRO MAYOR (transactions)
+    const { error } = await supabase.from('transactions').insert({
+      amount: parsedAmount,
       type: 'expense',
-      business_id: formData.get('business'),
+      business_id: businessId,
       category_id: categoryId,
       user_id: state.user.id,
       date: new Date().toISOString(),
-      note: photoUrl ? 'Con foto' : null
+      note: photoUrl ? `[CON COMPROBANTE: ${photoUrl}]` : null
     });
 
-    alert('Gasto registrado con éxito');
+    if (error) throw error;
+
+    window.showToast('✅ Gasto registrado exitosamente en la contabilidad.', 'success');
     state.activeModal = null;
+    
+    // Refrescar datos de inmediato
     await window.fetchData();
     render();
+
   } catch (err) {
-    console.error(err);
-    alert('Error al registrar gasto');
+    console.error("FALLO EN REGISTRO DE GASTO:", err);
+    window.showToast('❌ Error al registrar el gasto: ' + (err.message || 'Problema de red'), 'danger');
   } finally {
     btn.disabled = false;
     btn.innerHTML = originalHtml;
@@ -3130,6 +3272,9 @@ window.registerGeolocation = async (type) => {
         window.showToast(`Error guardando ubicación: ${dbErr.message}`, "danger");
       }
     }
+    
+    // Actualizar estado global de inmediato para que se desbloquee el POS sin recargar
+    await window.fetchData();
   } catch (e) {
     window.showToast(`Error obteniendo GPS: ${e.message}`, "danger");
   } finally {
