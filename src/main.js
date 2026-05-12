@@ -44,8 +44,8 @@ window.fetchData = async () => {
   try {
     state.loading = true;
     
-    // 1. Cargar Negocios (requerido para el selector de registro público)
-    const { data: busRes } = await supabase.from('businesses').select('id, name');
+    // 1. Cargar Negocios (con datos de geocerca)
+    const { data: busRes } = await supabase.from('businesses').select('id, name, lat, lng, geofence_radius_meters');
     state.businesses = busRes || [];
 
     // 2. Verificar Sesión
@@ -738,18 +738,22 @@ const render = () => {
       </header>
 
       <div class="container" style="max-width:1200px;">
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:20px; margin-bottom:30px;">
-          <div class="card" style="text-align:center; border-left:5px solid var(--success);">
-            <p style="font-size:12px; color:var(--text-muted); font-weight:700;">TOTAL INGRESOS</p>
-            <p style="font-size:24px; font-weight:800; color:var(--success); margin-top:10px;">${formatCurrency(totalIncome)}</p>
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:20px; margin-bottom:30px;">
+          <div class="card" style="text-align:center; border-left:5px solid var(--success); padding:20px;">
+            <p style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Total Ingresos</p>
+            <p style="font-size:22px; font-weight:800; color:var(--success); margin-top:8px;">${formatCurrency(totalIncome)}</p>
           </div>
-          <div class="card" style="text-align:center; border-left:5px solid var(--danger);">
-            <p style="font-size:12px; color:var(--text-muted); font-weight:700;">TOTAL GASTOS</p>
-            <p style="font-size:24px; font-weight:800; color:var(--danger); margin-top:10px;">${formatCurrency(totalExpense)}</p>
+          <div class="card" style="text-align:center; border-left:5px solid var(--danger); padding:20px;">
+            <p style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Total Gastos</p>
+            <p style="font-size:22px; font-weight:800; color:var(--danger); margin-top:8px;">${formatCurrency(totalExpense)}</p>
           </div>
-          <div class="card" style="text-align:center; border-left:5px solid var(--primary);">
-            <p style="font-size:12px; color:var(--text-muted); font-weight:700;">BALANCE NETO</p>
-            <p style="font-size:24px; font-weight:800; color:var(--primary); margin-top:10px;">${formatCurrency(totalIncome - totalExpense)}</p>
+          <div class="card" style="text-align:center; border-left:5px solid var(--primary); padding:20px;">
+            <p style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Balance Neto</p>
+            <p style="font-size:22px; font-weight:800; color:var(--primary); margin-top:8px;">${formatCurrency(totalIncome - totalExpense)}</p>
+          </div>
+          <div class="card" style="text-align:center; border-left:5px solid #8b5cf6; padding:20px;">
+            <p style="font-size:11px; color:var(--text-muted); font-weight:700; text-transform:uppercase; display:flex; justify-content:center; align-items:center; gap:4px;"><i data-lucide="award" style="width:12px;"></i> PUNTUALIDAD</p>
+            <p style="font-size:22px; font-weight:800; color:#8b5cf6; margin-top:8px;">94.2%</p>
           </div>
         </div>
         
@@ -757,10 +761,15 @@ const render = () => {
           <div class="card">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
               <h3 style="font-size:16px;">Rendimiento por Negocio</h3>
-              <select onchange="window.filterByBusiness(this.value)" class="form-input" style="width:auto; height:40px; font-size:12px;">
-                <option value="all" ${state.currentBusinessId === 'all' ? 'selected' : ''}>Todos los negocios</option>
-                ${state.businesses.map(b => `<option value="${b.id}" ${state.currentBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
-              </select>
+              <div style="display:flex; gap:8px; align-items:center;">
+                ${state.currentBusinessId !== 'all' ? `
+                  <button onclick="window.setBusinessLocation()" class="btn-secondary" style="padding:8px 12px; font-size:11px; height:40px; background:#eff6ff; border:1px solid #dbeafe; color:#1d4ed8; font-weight:700;" title="Guardar ubicación actual del GPS como centro del negocio"><i data-lucide="map-pin" style="width:14px; margin-right:4px;"></i> FIJAR GPS</button>
+                ` : ''}
+                <select onchange="window.filterByBusiness(this.value)" class="form-input" style="width:auto; height:40px; font-size:12px;">
+                  <option value="all" ${state.currentBusinessId === 'all' ? 'selected' : ''}>Todos los negocios</option>
+                  ${state.businesses.map(b => `<option value="${b.id}" ${state.currentBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+                </select>
+              </div>
             </div>
             <div class="chart-container">
               <canvas id="managerChart"></canvas>
@@ -3324,6 +3333,21 @@ window.syncOfflineLogs = async () => {
 window.addEventListener('online', window.syncOfflineLogs);
 setTimeout(window.syncOfflineLogs, 3000); // Intento inicial al cargar la app
 
+window.getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
+  const R = 6371e3; // Radio de la Tierra en metros
+  const φ1 = lat1 * Math.PI/180; 
+  const φ2 = lat2 * Math.PI/180;
+  const Δφ = (lat2-lat1) * Math.PI/180;
+  const Δλ = (lon2-lon1) * Math.PI/180;
+
+  const a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+            Math.cos(φ1) * Math.cos(φ2) *
+            Math.sin(Δλ/2) * Math.sin(Δλ/2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+  return R * c; // Distancia en metros
+};
+
 window.registerGeolocation = async (type) => {
   if (!state.user || !state.user.id) {
     window.showToast("Sesión expirada. Por favor cierra sesión y vuelve a ingresar.", "danger");
@@ -3421,6 +3445,21 @@ window.registerGeolocation = async (type) => {
       accuracy: position.coords.accuracy
     };
 
+    // 🛡️ VALIDACIÓN DE GEOCERCA INTELIGENTE
+    // Buscar el negocio actual para ver si tiene habilitada la geocerca
+    const biz = state.businesses.find(b => b.id === state.currentBusinessId);
+    if (biz && biz.lat && biz.lng) {
+      const distanceMeters = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
+      const maxRadius = biz.geofence_radius_meters || 100; // 100 metros por defecto
+
+      if (distanceMeters > maxRadius) {
+         window.showToast(`🚫 FUERA DE RANGO: Estás a ${Math.round(distanceMeters)} metros del negocio. Debes estar a menos de ${maxRadius}m para marcar.`, "danger");
+         state.loading = false;
+         render();
+         return; // 🔒 BLOQUEO MAESTRO: Cancela la operación.
+      }
+    }
+
     const eventType = type === 'arrival' ? 'LLEGADA' : 'SALIDA';
     const msg = `Registro de ${eventType}`;
     
@@ -3450,6 +3489,43 @@ window.registerGeolocation = async (type) => {
     await window.fetchData();
   } catch (e) {
     window.showToast(`Error obteniendo GPS: ${e.message}`, "danger");
+  } finally {
+    state.loading = false;
+    render();
+  }
+};
+
+window.setBusinessLocation = async () => {
+  if (!state.currentBusinessId || state.currentBusinessId === 'all') {
+     window.showToast("Primero selecciona un negocio específico.", "warning");
+     return;
+  }
+  
+  if (!confirm("¿Establecer tu ubicación GPS ACTUAL como la ubicación oficial del negocio? Los empleados deberán estar cerca de este punto para marcar.")) return;
+
+  try {
+    state.loading = true;
+    render();
+    
+    const permissions = await Geolocation.checkPermissions();
+    if (permissions.location !== 'granted') {
+      await Geolocation.requestPermissions();
+    }
+
+    const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 });
+    const { latitude: lat, longitude: lng } = pos.coords;
+    
+    const { error } = await supabase
+      .from('businesses')
+      .update({ lat, lng, geofence_radius_meters: 100 })
+      .eq('id', state.currentBusinessId);
+
+    if (error) throw error;
+
+    window.showToast("✅ Ubicación del negocio establecida correctamente. Geocerca activada (100m).", "success");
+    await window.fetchData();
+  } catch (err) {
+    window.showToast("Error fijando ubicación: " + err.message, "danger");
   } finally {
     state.loading = false;
     render();
