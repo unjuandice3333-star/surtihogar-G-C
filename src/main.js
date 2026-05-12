@@ -980,7 +980,14 @@ const render = () => {
       } catch(e) { msgText = l.message || ''; }
       
       const isArr = msgText.includes('LLEGADA');
-      const d = new Date(l.timestamp);
+      const rawD = new Date(l.timestamp);
+      
+      // INTELIGENCIA DE TURNO NOCTURNO:
+      // Si es una SALIDA y ocurre entre 00:00 y 06:00 AM, fusionar con el día anterior calendario
+      let d = new Date(l.timestamp);
+      if (!isArr && rawD.getHours() < 6) {
+        d = new Date(rawD.getTime() - 12 * 60 * 60 * 1000); // Retroceder 12h para caer en la fecha del inicio del turno
+      }
       
       // Agrupar por fecha YYYY-MM-DD
       const yr = d.getFullYear();
@@ -1145,7 +1152,13 @@ const render = () => {
       } catch(e) { msgText = l.message || ''; }
       
       const isArr = msgText.includes('LLEGADA');
-      const d = new Date(l.timestamp);
+      const rawD = new Date(l.timestamp);
+      
+      // INTELIGENCIA DE TURNO NOCTURNO:
+      let d = new Date(l.timestamp);
+      if (!isArr && rawD.getHours() < 6) {
+        d = new Date(rawD.getTime() - 12 * 60 * 60 * 1000);
+      }
       
       const yr = d.getFullYear();
       const mt = String(d.getMonth() + 1).padStart(2, '0');
