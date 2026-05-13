@@ -46,7 +46,7 @@ window.fetchData = async () => {
     state.loading = true;
     
     // 1. Cargar Negocios (con datos de geocerca)
-    const { data: busRes } = await supabase.from('businesses').select('id, name, lat, lng, geofence_radius_meters');
+    const { data: busRes } = await supabase.from('businesses').select('id, name, type, lat, lng, geofence_radius_meters');
     state.businesses = busRes || [];
 
     // 2. Verificar Sesión
