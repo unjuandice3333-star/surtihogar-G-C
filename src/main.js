@@ -846,6 +846,7 @@ const render = () => {
                 ${state.currentBusinessId !== 'all' ? `
                   <button onclick="window.setBusinessLocation()" class="btn-secondary" style="padding:8px 12px; font-size:11px; height:40px; background:#eff6ff; border:1px solid #dbeafe; color:#1d4ed8; font-weight:700;" title="Guardar ubicación actual del GPS como centro del negocio"><i data-lucide="map-pin" style="width:14px; margin-right:4px;"></i> FIJAR GPS</button>
                 ` : ''}
+                <button onclick="state.activeModal='new_business';window.render()" class="btn-primary" style="padding:8px 12px; font-size:11px; height:40px; background:var(--primary); border:none; font-weight:700; display:flex; align-items:center; gap:4px;" title="Crear un nuevo negocio o sucursal"><i data-lucide="plus" style="width:14px;"></i> NUEVA SEDE</button>
                 <select onchange="window.filterByBusiness(this.value)" class="form-input" style="width:auto; height:40px; font-size:12px;">
                   <option value="all" ${state.currentBusinessId === 'all' ? 'selected' : ''}>Todos los negocios</option>
                   ${state.businesses.map(b => `<option value="${b.id}" ${state.currentBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
@@ -2842,6 +2843,29 @@ const render = () => {
         </div>
       </div>
     </div>` : ''}
+    
+    ${state.activeModal === 'new_business' ? `
+    <div class="modal-overlay">
+      <div class="modal-card card" style="max-width:400px;">
+        <div class="modal-close" onclick="state.activeModal=null;render()"><i data-lucide="x"></i></div>
+        <h2 style="display:flex; align-items:center; gap:8px; font-size:18px; font-weight:800;"><i data-lucide="plus-circle" style="color:var(--primary); width:20px;"></i> Nueva Sede Operativa</h2>
+        <p style="font-size:12px; color:var(--text-muted); margin-bottom:20px;">Registra una nueva sucursal o modelo operativo en tu red.</p>
+        <form onsubmit="window.saveNewBusiness(event)">
+          <div class="form-group">
+            <label style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase;">Nombre del Negocio / Sede</label>
+            <input type="text" name="name" class="form-input" placeholder="Ej: J&M ROPA" required style="height:45px;">
+          </div>
+          <div class="form-group">
+            <label style="font-size:11px; font-weight:700; color:#475569; text-transform:uppercase;">Tipo de Operación</label>
+            <select name="type" class="form-input" required style="height:45px;">
+              <option value="operativo">Negocio Operativo (POS, Stock, Turnos)</option>
+              <option value="arriendo">Inmueble / Arriendo</option>
+            </select>
+          </div>
+          <button class="btn-primary" style="width:100%; margin-top:10px; height:45px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:8px;">💾 CREAR NEGOCIO AHORA</button>
+        </form>
+      </div>
+    </div>` : ''}
   `;
 
   const toastHtml = `<div id="toast-container"></div>`;
@@ -3418,6 +3442,55 @@ window.testStockManagement = async () => {
 
   } catch (err) {
     window.logQa("Carga Inventario", "FAILED", err.message);
+  }
+};
+
+window.saveNewBusiness = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  const orig = btn.innerHTML;
+  
+  try {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> GUARDANDO...';
+    
+    const fd = new FormData(e.target);
+    const name = fd.get('name');
+    const type = fd.get('type');
+    
+    // Referenciar coordenadas base de un negocio existente para evitar fallos en GPS
+    let baseLat = 4.1447;
+    let baseLng = -73.6275;
+    if (state.businesses && state.businesses.length > 0) {
+       const ref = state.businesses.find(b => b.lat && b.lng);
+       if (ref) {
+          baseLat = ref.lat;
+          baseLng = ref.lng;
+       }
+    }
+
+    const { data, error } = await supabase.from('businesses').insert({
+      name,
+      type,
+      lat: baseLat,
+      lng: baseLng,
+      geofence_radius_meters: 150
+    }).select();
+
+    if (error) throw error;
+
+    window.showToast(`✅ Negocio "${name}" creado con éxito`, "success");
+    state.activeModal = null;
+    
+    // Recargar todos los datos del sistema para propagar cambios
+    await window.fetchData();
+    
+  } catch(err) {
+    console.error(err);
+    window.showToast("⚠️ Error: " + err.message, "warning");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
   }
 };
 
