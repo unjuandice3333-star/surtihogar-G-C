@@ -176,16 +176,27 @@ window.fetchByodDashboard = async () => {
   state.loading = true;
   render();
   try {
+    // Parche Maestro: Decoplar consultas relacionales para evitar error de schema cache (HTTP 400)
     const [hbRes, scRes, logsRes] = await Promise.all([
-      supabase.from('device_heartbeats').select('*, users(name)').order('timestamp', { ascending: false }).limit(50),
-      supabase.from('operational_scores').select('*, users(name)').order('score', { ascending: false }),
-      supabase.from('system_logs').select('*, users(name)').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(10)
+      supabase.from('device_heartbeats').select('*').order('timestamp', { ascending: false }).limit(50),
+      supabase.from('operational_scores').select('*').order('score', { ascending: false }),
+      supabase.from('system_logs').select('*').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(10)
     ]);
     
+    if (hbRes.error) throw hbRes.error;
+    if (scRes.error) throw scRes.error;
+    if (logsRes.error) throw logsRes.error;
+
     state.byodHeartbeats = hbRes.data || [];
     state.byodScores = scRes.data || [];
     state.byodSecurityLogs = logsRes.data || [];
     
+    // Hidratación Autónoma del personal para búsquedas en memoria impecables
+    if (!state.employees || state.employees.length === 0) {
+      const { data: empRes } = await supabase.from('users').select('id, name, role, active');
+      state.employees = empRes || [];
+    }
+
     state.view = 'byod_dashboard';
   } catch(e) {
     window.showToast("Error cargando BYOD: " + e.message, "danger");
@@ -1944,10 +1955,12 @@ const render = () => {
                   if (pct < 85) color = '#f59e0b';
                   if (pct < 70) color = '#ef4444';
                   
+                  const scoreUser = state.employees?.find(e => e.id === scoreItem.user_id) || (state.user?.id === scoreItem.user_id ? state.user : null);
+                  
                   return `
                     <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:15px; border-radius:12px; display:flex; align-items:center; justify-content:space-between;">
                       <div>
-                        <p style="font-weight:700; font-size:14px; color:#1e293b;">${scoreItem.users?.name || 'Colaborador'}</p>
+                        <p style="font-weight:700; font-size:14px; color:#1e293b;">${scoreUser?.name || 'Colaborador'}</p>
                         <p style="font-size:11px; color:#64748b; margin-top:2px;">Incidencias: ${scoreItem.incidents_count || 0}</p>
                       </div>
                       <div style="text-align:right;">
@@ -2000,13 +2013,15 @@ const render = () => {
                     if (bat < 30) batColor = '#f59e0b';
                     if (bat < 15) batColor = '#ef4444';
 
+                    const hbUser = state.employees?.find(e => e.id === hb.user_id) || (state.user?.id === hb.user_id ? state.user : null);
+
                     return `
                       <tr style="border-bottom:1px solid #f1f5f9; transition:background 0.1s;">
                         <td style="padding:15px 20px;">
                           <div style="display:flex; align-items:center; gap:10px;">
                             <div style="width:8px; height:8px; border-radius:50%; background:#10b981;" title="Online"></div>
                             <div>
-                              <p style="font-weight:700; color:#1e293b; margin:0;">${hb.users?.name || 'Colaborador'}</p>
+                              <p style="font-weight:700; color:#1e293b; margin:0;">${hbUser?.name || 'Colaborador'}</p>
                               <p style="font-size:10px; color:#64748b; margin-top:2px; text-transform:uppercase;">📶 ${hb.network_status || 'Online'} | ${hb.device_platform || 'Device'}</p>
                             </div>
                           </div>
