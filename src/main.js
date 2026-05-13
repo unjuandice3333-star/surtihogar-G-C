@@ -179,19 +179,22 @@ window.fetchByodDashboard = async () => {
   render();
   try {
     // Parche Maestro: Decoplar consultas relacionales para evitar error de schema cache (HTTP 400)
-    const [hbRes, scRes, logsRes] = await Promise.all([
-      supabase.from('device_heartbeats').select('*').order('timestamp', { ascending: false }).limit(50),
+    const [hbRes, scRes, logsRes, shiftRes] = await Promise.all([
+      supabase.from('device_heartbeats').select('*').order('timestamp', { ascending: false }).limit(150),
       supabase.from('operational_scores').select('*').order('score', { ascending: false }),
-      supabase.from('system_logs').select('*').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(10)
+      supabase.from('system_logs').select('*').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(10),
+      supabase.from('shifts').select('*, businesses(id, name, lat, lng, geofence_radius_meters)').is('end_time', null)
     ]);
     
     if (hbRes.error) throw hbRes.error;
     if (scRes.error) throw scRes.error;
     if (logsRes.error) throw logsRes.error;
+    if (shiftRes.error) throw shiftRes.error;
 
     state.byodHeartbeats = hbRes.data || [];
     state.byodScores = scRes.data || [];
     state.byodSecurityLogs = logsRes.data || [];
+    state.byodActiveShifts = shiftRes.data || [];
     
     // Hidratación Autónoma del personal para búsquedas en memoria impecables
     if (!state.employees || state.employees.length === 0) {
@@ -2007,82 +2010,139 @@ const render = () => {
             </div>
           </div>
 
-          <!-- 📡 COLUMNA DERECHA: TIMELINE DE LATIDOS -->
-          <div class="card" style="padding:0; overflow:hidden;">
-            <div style="padding:20px 25px; border-bottom:1px solid #e2e8f0; background:#f8fafc; display:flex; justify-content:space-between; align-items:center;">
-              <h3 style="font-size:15px; font-weight:800; color:#334155; margin:0; display:flex; align-items:center; gap:8px;">
-                <i data-lucide="activity" style="width:16px; color:#ef4444;"></i> TIMELINE OPERACIONAL EN VIVO
-              </h3>
-              <span style="font-size:11px; background:#e2e8f0; padding:4px 10px; border-radius:20px; font-weight:700; color:#64748b;">ÚLTIMOS 50 PINGS</span>
-            </div>
+          <!-- 📡 COLUMNA DERECHA: MONITOREO Y UBICACIÓN -->
+          <div style="display:flex; flex-direction:column; gap:25px;">
+            
+            <!-- SECCIÓN DE LOCALIZACIÓN ACTIVA -->
+            <div class="card" style="padding:25px;">
+              <div style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center;">
+                <h3 style="font-size:16px; font-weight:800; color:#1e293b; display:flex; align-items:center; gap:8px; margin:0;">
+                  <i data-lucide="map-pin" style="width:18px; color:#ef4444;"></i> UBICACIÓN EN TIEMPO REAL
+                </h3>
+                <span style="font-size:11px; background:#ecfdf5; color:#047857; padding:4px 10px; border-radius:20px; font-weight:700;">GEOPERÍMETRO ACTIVO</span>
+              </div>
 
-            <div style="overflow-x:auto;">
-              <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                <thead style="background:#f1f5f9; text-align:left; color:#475569;">
-                  <tr>
-                    <th style="padding:15px 20px; font-weight:700;">COLABORADOR</th>
-                    <th style="padding:15px 20px; font-weight:700;">ESTADO APP</th>
-                    <th style="padding:15px 20px; font-weight:700; text-align:center;">BATERÍA</th>
-                    <th style="padding:15px 20px; font-weight:700; text-align:center;">GPS PRECISION</th>
-                    <th style="padding:15px 20px; font-weight:700; text-align:right;">TIEMPO</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${(state.byodHeartbeats || []).length === 0 ? `
-                    <tr><td colspan="5" style="padding:60px 20px; text-align:center; color:#64748b;">Esperando transmisión de primer latido...</td></tr>
-                  ` : state.byodHeartbeats.map(hb => {
-                    const isFg = hb.app_state === 'FOREGROUND';
-                    const hasAccurateGps = hb.accuracy && hb.accuracy < 50;
-                    const bat = hb.battery_level || 0;
-                    let batColor = '#10b981';
-                    if (bat < 30) batColor = '#f59e0b';
-                    if (bat < 15) batColor = '#ef4444';
+              <div style="display:flex; flex-direction:column; gap:15px;">
+                ${(() => {
+                  // 1. Agrupar por colaborador para tomar solo la señal más reciente
+                  const latestByEmployee = {};
+                  (state.byodHeartbeats || []).forEach(hb => {
+                    if (!latestByEmployee[hb.user_id]) {
+                      latestByEmployee[hb.user_id] = hb;
+                    }
+                  });
 
+                  const uniqueActiveList = Object.values(latestByEmployee);
+
+                  if (uniqueActiveList.length === 0) {
+                    return '<div style="padding:40px; text-align:center; color:#64748b; font-size:12px; background:#f8fafc; border-radius:12px;">No hay señales activas transmitiendo en este momento...</div>';
+                  }
+
+                  return uniqueActiveList.map(hb => {
                     const hbUser = state.employees?.find(e => e.id === hb.user_id) || (state.user?.id === hb.user_id ? state.user : null);
+                    const activeShift = (state.byodActiveShifts || []).find(s => s.user_id === hb.user_id);
+                    const biz = activeShift?.businesses || (state.businesses || []).find(b => b.id === activeShift?.business_id);
+
+                    let geofenceStatus = "⚪ SIN COORDENADAS";
+                    let statusColor = "#64748b";
+                    let badgeBg = "#f1f5f9";
+                    let distanceDetail = "Señal de GPS no enviada o desactivada.";
+                    let isOutside = false;
+
+                    if (hb.lat && hb.lng && biz && biz.lat && biz.lng) {
+                       const distMeters = window.getDistanceInMeters(hb.lat, hb.lng, biz.lat, biz.lng);
+                       const maxRadius = biz.geofence_radius_meters || 150;
+                       isOutside = distMeters > maxRadius;
+
+                       geofenceStatus = isOutside ? "🚨 FUERA DEL NEGOCIO" : "🟢 DENTRO DEL RANGO";
+                       statusColor = isOutside ? "#ef4444" : "#10b981";
+                       badgeBg = isOutside ? "#fef2f2" : "#ecfdf5";
+                       
+                       const distText = distMeters > 1000 ? `${(distMeters/1000).toFixed(2)} km` : `${Math.round(distMeters)} metros`;
+                       distanceDetail = `Ubicado a <strong>${distText}</strong> de la sede <strong>${biz.name}</strong> (Límite: ${maxRadius}m).`;
+                    } else if (hb.lat && hb.lng) {
+                       geofenceStatus = "🔵 RASTREO ACTIVO";
+                       statusColor = "#3b82f6";
+                       badgeBg = "#eff6ff";
+                       distanceDetail = "Transmitiendo coordenadas, pero no tiene turno registrado hoy en esta sede.";
+                    }
+
+                    const lastPingTime = new Date(hb.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
+                    const mapLink = (hb.lat && hb.lng) ? `https://www.google.com/maps/search/?api=1&query=${hb.lat},${hb.lng}` : '#';
 
                     return `
-                      <tr style="border-bottom:1px solid #f1f5f9; transition:background 0.1s;">
-                        <td style="padding:15px 20px;">
-                          <div style="display:flex; align-items:center; gap:10px;">
-                            <div style="width:8px; height:8px; border-radius:50%; background:#10b981;" title="Online"></div>
+                      <div style="background:white; border:1.5px solid ${isOutside ? '#fee2e2' : '#f1f5f9'}; border-radius:16px; padding:20px; display:flex; flex-direction:column; gap:15px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.03);">
+                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                          <div style="display:flex; align-items:center; gap:12px;">
+                            <div style="background:${isOutside ? '#fee2e2' : '#f1f5f9'}; color:${isOutside ? '#ef4444' : '#475569'}; width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px;">
+                              ${(hbUser?.name || 'C').charAt(0).toUpperCase()}
+                            </div>
                             <div>
-                              <p style="font-weight:700; color:#1e293b; margin:0;">${hbUser?.name || 'Colaborador'}</p>
-                              <p style="font-size:10px; color:#64748b; margin-top:2px; text-transform:uppercase;">📶 ${hb.network_status || 'Online'} | ${hb.device_platform || 'Device'}</p>
+                              <p style="font-weight:800; font-size:15px; color:#1e293b; margin:0;">${hbUser?.name || 'Colaborador'}</p>
+                              <p style="font-size:11px; color:#64748b; margin-top:2px;">Último reporte: ⏱️ ${lastPingTime}</p>
                             </div>
                           </div>
-                        </td>
-                        <td style="padding:15px 20px;">
-                          <span style="display:inline-flex; align-items:center; font-size:10px; font-weight:800; padding:4px 8px; border-radius:6px; gap:4px; 
-                            background:${isFg ? '#ecfdf5' : '#fff7ed'}; 
-                            color:${isFg ? '#059669' : '#ea580c'};
-                            border:1px solid ${isFg ? '#a7f3d0' : '#ffedd5'};">
-                            <i data-lucide="${isFg ? 'eye' : 'eye-off'}" style="width:10px;"></i> ${isFg ? 'PANTALLA ACTIVA' : 'MINIMIZADO / LOCK'}
+                          
+                          <span style="display:inline-flex; align-items:center; font-size:11px; font-weight:800; padding:6px 12px; border-radius:30px; gap:4px; background:${badgeBg}; color:${statusColor}; border:1px solid ${statusColor}33;">
+                             ${geofenceStatus}
                           </span>
-                        </td>
-                        <td style="padding:15px 20px; text-align:center;">
-                          <div style="display:inline-flex; flex-direction:column; align-items:center; min-width:50px;">
-                            <span style="font-weight:700; font-size:11px; color:#334155;">${bat}% ${hb.is_charging ? '⚡' : ''}</span>
-                            <div style="width:40px; height:5px; background:#e2e8f0; border-radius:3px; overflow:hidden; margin-top:3px;">
-                              <div style="width:${bat}%; height:100%; background:${batColor};"></div>
-                            </div>
-                          </div>
-                        </td>
-                        <td style="padding:15px 20px; text-align:center;">
-                          <span style="display:inline-block; font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px;
-                            background:${hasAccurateGps ? '#eff6ff' : '#fef2f2'}; 
-                            color:${hasAccurateGps ? '#2563eb' : '#dc2626'};">
-                            🎯 ${hb.accuracy ? Math.round(hb.accuracy) + 'm' : 'N/A'}
-                          </span>
-                        </td>
-                        <td style="padding:15px 20px; text-align:right; color:#64748b; font-size:12px; font-weight:600;">
-                          ${new Date(hb.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
-                        </td>
-                      </tr>
+                        </div>
+
+                        <div style="background:#f8fafc; border-radius:12px; padding:12px 15px; font-size:12px; color:#475569; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                          <span>📍 ${distanceDetail}</span>
+                          ${(hb.lat && hb.lng) ? `
+                            <a href="${mapLink}" target="_blank" style="background:#1e293b; color:white; padding:8px 14px; border-radius:8px; font-size:11px; font-weight:800; display:inline-flex; align-items:center; gap:6px; text-decoration:none; transition:background 0.2s;" onmouseover="this.style.background='#334155'" onmouseout="this.style.background='#1e293b'">
+                              <i data-lucide="map" style="width:12px;"></i> RASTREAR EN MAPA
+                            </a>
+                          ` : `
+                            <span style="font-size:11px; color:#94a3b8; font-weight:700;">SIN GPS</span>
+                          `}
+                        </div>
+                      </div>
                     `;
-                  }).join('')}
-                </tbody>
-              </table>
+                  }).join('');
+                })()}
+              </div>
             </div>
+
+            <!-- HISTORIAL RECIENTE DE SEÑALES (Simplificado) -->
+            <div class="card" style="padding:0; overflow:hidden;">
+              <div style="padding:15px 20px; border-bottom:1px solid #e2e8f0; background:#f8fafc; display:flex; justify-content:space-between; align-items:center;">
+                <h4 style="font-size:13px; font-weight:800; color:#475569; margin:0; display:flex; align-items:center; gap:6px;">
+                  <i data-lucide="activity" style="width:14px;"></i> DETALLE DE HISTORIAL COMPLETO
+                </h4>
+                <span style="font-size:10px; background:#e2e8f0; padding:3px 8px; border-radius:10px; font-weight:700; color:#64748b;">LOGS</span>
+              </div>
+              <div style="max-height:300px; overflow-y:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:12px;">
+                  <thead style="background:#f1f5f9; position:sticky; top:0; text-align:left; color:#64748b; border-bottom:1px solid #e2e8f0;">
+                    <tr>
+                      <th style="padding:10px 15px; font-weight:700;">COLABORADOR</th>
+                      <th style="padding:10px 15px; font-weight:700;">ESTADO APP</th>
+                      <th style="padding:10px 15px; font-weight:700; text-align:center;">BAT</th>
+                      <th style="padding:10px 15px; font-weight:700; text-align:right;">HORA</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${(state.byodHeartbeats || []).slice(0, 20).map(hb => {
+                      const isFg = hb.app_state === 'FOREGROUND';
+                      const hbUser = state.employees?.find(e => e.id === hb.user_id) || (state.user?.id === hb.user_id ? state.user : null);
+                      return `
+                        <tr style="border-bottom:1px solid #f1f5f9;">
+                          <td style="padding:10px 15px; font-weight:700; color:#334155;">${hbUser?.name || 'Colaborador'}</td>
+                          <td style="padding:10px 15px;">
+                            <span style="font-weight:700; color:${isFg ? '#10b981' : '#ea580c'};">${isFg ? 'ACTIVA' : 'BLOQUEADO'}</span>
+                          </td>
+                          <td style="padding:10px 15px; text-align:center; font-weight:700;">${hb.battery_level || 0}%</td>
+                          <td style="padding:10px 15px; text-align:right; color:#64748b;">${new Date(hb.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
           </div>
 
         </div>
