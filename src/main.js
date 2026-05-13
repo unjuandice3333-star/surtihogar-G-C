@@ -2,6 +2,7 @@ import './style.css'
 import { supabase } from './lib/supabase'
 import { SupplierService } from './services/SupplierService'
 import { DatabaseService } from './services/DatabaseService'
+import { byodService } from './services/ByodComplianceService'
 import { Geolocation } from '@capacitor/geolocation'
 
 // Centralización de Filtros (Mejores Prácticas DRY)
@@ -105,6 +106,13 @@ window.fetchData = async () => {
         }
       } catch(e) {}
       state.hasActiveAttendance = hasGeoActive;
+      
+      // Activar/Desactivar motor de telemetría silenciosa BYOD
+      if (hasGeoActive && state.user?.role !== 'admin') {
+         byodService.startTracking(session.user.id);
+      } else {
+         byodService.stopTracking();
+      }
     }
 
     // 6. Actualizar Turno Activo y Negocio Definitivo
@@ -162,6 +170,29 @@ window.logSystemError = async (tipo, mensaje, modulo, contexto = {}) => {
 
 window.logSecurityEvent = async (mensaje, modulo, contexto = {}) => {
   await window.logSystemError('SECURITY_ALERT', mensaje, modulo, contexto);
+};
+
+window.fetchByodDashboard = async () => {
+  state.loading = true;
+  render();
+  try {
+    const [hbRes, scRes, logsRes] = await Promise.all([
+      supabase.from('device_heartbeats').select('*, users(name)').order('timestamp', { ascending: false }).limit(50),
+      supabase.from('operational_scores').select('*, users(name)').order('score', { ascending: false }),
+      supabase.from('system_logs').select('*, users(name)').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(10)
+    ]);
+    
+    state.byodHeartbeats = hbRes.data || [];
+    state.byodScores = scRes.data || [];
+    state.byodSecurityLogs = logsRes.data || [];
+    
+    state.view = 'byod_dashboard';
+  } catch(e) {
+    window.showToast("Error cargando BYOD: " + e.message, "danger");
+  } finally {
+    state.loading = false;
+    render();
+  }
 };
 
 window.fetchLogs = async (targetView = 'logs') => {
@@ -479,6 +510,7 @@ window.handleLogin = async (e) => {
 
 window.handleLogout = async () => {
   state.loading = true; render();
+  byodService.stopTracking();
   await supabase.auth.signOut();
   location.reload();
 };
@@ -743,6 +775,7 @@ const render = () => {
           <div style="display:flex; gap:8px; padding-right:10px; border-right:1px solid #e2e8f0; margin-right:5px;">
             <div onclick="state.view='logs';window.fetchLogs()" class="icon-btn" title="Logs"><i data-lucide="clipboard-list"></i></div>
             <div onclick="state.view='shifts_admin';window.render()" class="icon-btn" title="Turnos"><i data-lucide="clock"></i></div>
+            <div onclick="window.fetchByodDashboard()" class="icon-btn" title="Auditoría BYOD" style="background:#f0fdf4; color:#16a34a; border-color:#bbf7d0;"><i data-lucide="shield"></i></div>
             <div onclick="window.fetchData()" class="icon-btn"><i data-lucide="refresh-cw"></i></div>
           </div>
           <div onclick="state.view='app';window.render()" class="icon-btn pill" style="background:var(--primary); color:white; border:none;">Volver</div>
@@ -1784,6 +1817,159 @@ const render = () => {
               </table>
             </div>
           </div>
+        </div>
+      </div>
+    `;
+  }
+
+  else if (state.view === 'byod_dashboard') {
+    html = `
+      <header class="main-header" style="background:#0f172a; color:white; border-bottom: 1px solid #1e293b;">
+        <div class="logo-container">
+          <div class="logo-icon" style="background:rgba(255,255,255,0.1);"><i data-lucide="shield-check" style="color:#10b981;"></i></div>
+          <div class="header-title">
+            <p class="role-tag" style="background:#10b981; color:white;">BYOD SECURE</p>
+            <h1 style="color:white;">Auditoría Operacional</h1>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button onclick="window.fetchByodDashboard()" class="btn-secondary" style="background:rgba(255,255,255,0.1); border-color:#334155; color:white;"><i data-lucide="refresh-cw" style="width:14px; margin-right:5px;"></i> ACTUALIZAR</button>
+          <div onclick="state.view='manager_dashboard';render()" class="icon-btn pill" style="background:rgba(255,255,255,0.1); color:white; border:none;">Regresar</div>
+        </div>
+      </header>
+
+      <div class="container" style="max-width:1300px; margin-top:30px; padding-bottom:80px;">
+        <!-- ALERTA DE SEGURIDAD FLOTANTE (Si hay logs recientes) -->
+        ${(state.byodSecurityLogs || []).length > 0 ? `
+          <div style="background:#fef2f2; border-left:5px solid #ef4444; padding:15px 20px; border-radius:12px; margin-bottom:30px; display:flex; align-items:center; gap:15px;">
+            <div style="background:#fee2e2; color:#ef4444; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+              <i data-lucide="alert-triangle" style="width:20px;"></i>
+            </div>
+            <div style="flex:1;">
+              <p style="font-weight:800; font-size:13px; color:#991b1b; text-transform:uppercase; letter-spacing:0.5px;">ALERTA CRÍTICA RECIENTE</p>
+              <p style="font-size:13px; color:#b91c1c; margin-top:2px;">${JSON.parse(state.byodSecurityLogs[0].message)?.text || 'Incidente de seguridad detectado'}</p>
+            </div>
+            <span style="font-size:11px; color:#ef4444; font-weight:700;">Hace un momento</span>
+          </div>
+        ` : ''}
+
+        <div style="display:grid; grid-template-columns: 1fr 2fr; gap:30px; align-items:start;">
+          
+          <!-- 📊 COLUMNA IZQUIERDA: SCORES OPERACIONALES -->
+          <div style="display:flex; flex-direction:column; gap:25px;">
+            <div class="card" style="padding:25px;">
+              <h3 style="font-size:15px; font-weight:800; margin-bottom:20px; display:flex; align-items:center; gap:8px; color:#334155;">
+                <i data-lucide="award" style="width:16px; color:#6366f1;"></i> RANKING DE CUMPLIMIENTO
+              </h3>
+              
+              <div style="display:flex; flex-direction:column; gap:15px;">
+                ${(state.byodScores || []).length === 0 ? '<p style="text-align:center; font-size:12px; color:var(--text-muted); padding:20px;">Calculando primeros índices...</p>' : state.byodScores.map(scoreItem => {
+                  const pct = parseFloat(scoreItem.score || 100).toFixed(1);
+                  let color = '#10b981';
+                  if (pct < 85) color = '#f59e0b';
+                  if (pct < 70) color = '#ef4444';
+                  
+                  return `
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:15px; border-radius:12px; display:flex; align-items:center; justify-content:space-between;">
+                      <div>
+                        <p style="font-weight:700; font-size:14px; color:#1e293b;">${scoreItem.users?.name || 'Colaborador'}</p>
+                        <p style="font-size:11px; color:#64748b; margin-top:2px;">Incidencias: ${scoreItem.incidents_count || 0}</p>
+                      </div>
+                      <div style="text-align:right;">
+                        <span style="font-size:18px; font-weight:900; color:${color}">${pct}%</span>
+                        <div style="width:80px; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden; margin-top:5px;">
+                          <div style="width:${pct}%; height:100%; background:${color}; border-radius:3px;"></div>
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+
+            <!-- CAJA INFO TECNICA -->
+            <div class="card" style="background:#0f172a; color:rgba(255,255,255,0.7); padding:20px; border:none;">
+              <h4 style="color:white; font-size:13px; font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:6px;"><i data-lucide="info" style="width:14px;"></i> ¿Cómo funciona?</h4>
+              <p style="font-size:11px; line-height:1.6;">Este monitor analiza el latido del dispositivo en tiempo real cada 5 minutos únicamente cuando hay turnos activos. El score deduce puntos automáticamente ante desconexiones y abandonos reiterados de la aplicación.</p>
+            </div>
+          </div>
+
+          <!-- 📡 COLUMNA DERECHA: TIMELINE DE LATIDOS -->
+          <div class="card" style="padding:0; overflow:hidden;">
+            <div style="padding:20px 25px; border-bottom:1px solid #e2e8f0; background:#f8fafc; display:flex; justify-content:space-between; align-items:center;">
+              <h3 style="font-size:15px; font-weight:800; color:#334155; margin:0; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="activity" style="width:16px; color:#ef4444;"></i> TIMELINE OPERACIONAL EN VIVO
+              </h3>
+              <span style="font-size:11px; background:#e2e8f0; padding:4px 10px; border-radius:20px; font-weight:700; color:#64748b;">ÚLTIMOS 50 PINGS</span>
+            </div>
+
+            <div style="overflow-x:auto;">
+              <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                <thead style="background:#f1f5f9; text-align:left; color:#475569;">
+                  <tr>
+                    <th style="padding:15px 20px; font-weight:700;">COLABORADOR</th>
+                    <th style="padding:15px 20px; font-weight:700;">ESTADO APP</th>
+                    <th style="padding:15px 20px; font-weight:700; text-align:center;">BATERÍA</th>
+                    <th style="padding:15px 20px; font-weight:700; text-align:center;">GPS PRECISION</th>
+                    <th style="padding:15px 20px; font-weight:700; text-align:right;">TIEMPO</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${(state.byodHeartbeats || []).length === 0 ? `
+                    <tr><td colspan="5" style="padding:60px 20px; text-align:center; color:#64748b;">Esperando transmisión de primer latido...</td></tr>
+                  ` : state.byodHeartbeats.map(hb => {
+                    const isFg = hb.app_state === 'FOREGROUND';
+                    const hasAccurateGps = hb.accuracy && hb.accuracy < 50;
+                    const bat = hb.battery_level || 0;
+                    let batColor = '#10b981';
+                    if (bat < 30) batColor = '#f59e0b';
+                    if (bat < 15) batColor = '#ef4444';
+
+                    return `
+                      <tr style="border-bottom:1px solid #f1f5f9; transition:background 0.1s;">
+                        <td style="padding:15px 20px;">
+                          <div style="display:flex; align-items:center; gap:10px;">
+                            <div style="width:8px; height:8px; border-radius:50%; background:#10b981;" title="Online"></div>
+                            <div>
+                              <p style="font-weight:700; color:#1e293b; margin:0;">${hb.users?.name || 'Colaborador'}</p>
+                              <p style="font-size:10px; color:#64748b; margin-top:2px; text-transform:uppercase;">📶 ${hb.network_status || 'Online'} | ${hb.device_platform || 'Device'}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td style="padding:15px 20px;">
+                          <span style="display:inline-flex; align-items:center; font-size:10px; font-weight:800; padding:4px 8px; border-radius:6px; gap:4px; 
+                            background:${isFg ? '#ecfdf5' : '#fff7ed'}; 
+                            color:${isFg ? '#059669' : '#ea580c'};
+                            border:1px solid ${isFg ? '#a7f3d0' : '#ffedd5'};">
+                            <i data-lucide="${isFg ? 'eye' : 'eye-off'}" style="width:10px;"></i> ${isFg ? 'PANTALLA ACTIVA' : 'MINIMIZADO / LOCK'}
+                          </span>
+                        </td>
+                        <td style="padding:15px 20px; text-align:center;">
+                          <div style="display:inline-flex; flex-direction:column; align-items:center; min-width:50px;">
+                            <span style="font-weight:700; font-size:11px; color:#334155;">${bat}% ${hb.is_charging ? '⚡' : ''}</span>
+                            <div style="width:40px; height:5px; background:#e2e8f0; border-radius:3px; overflow:hidden; margin-top:3px;">
+                              <div style="width:${bat}%; height:100%; background:${batColor};"></div>
+                            </div>
+                          </div>
+                        </td>
+                        <td style="padding:15px 20px; text-align:center;">
+                          <span style="display:inline-block; font-size:11px; font-weight:700; padding:3px 8px; border-radius:4px;
+                            background:${hasAccurateGps ? '#eff6ff' : '#fef2f2'}; 
+                            color:${hasAccurateGps ? '#2563eb' : '#dc2626'};">
+                            🎯 ${hb.accuracy ? Math.round(hb.accuracy) + 'm' : 'N/A'}
+                          </span>
+                        </td>
+                        <td style="padding:15px 20px; text-align:right; color:#64748b; font-size:12px; font-weight:600;">
+                          ${new Date(hb.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}
+                        </td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
         </div>
       </div>
     `;
