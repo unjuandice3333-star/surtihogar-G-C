@@ -2546,70 +2546,73 @@ const render = () => {
         </form>
       </div>
     </div>` : ''}
-    ${state.activeModal === 'new_product' ? `
-    <div class="modal-overlay">
-      <div class="modal-card card" style="max-width:450px;">
-        <div class="modal-close" onclick="state.activeModal=null;render()"><i data-lucide="x"></i></div>
-        <h2>Nuevo Producto Oficial</h2>
-        <p style="font-size:12px; color:var(--text-muted); margin-bottom:20px;">Registra productos con trazabilidad completa de stock y costos.</p>
-        <form onsubmit="window.saveNewProduct(event)">
-          
-          <div style="margin-bottom:20px; padding:15px; background:#f8fafc; border-radius:15px; border:1px dashed #cbd5e1;">
-            <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:700; font-size:13px; color:var(--primary);">
-              <input type="checkbox" onchange="state.fromPending=this.checked;render()" ${state.fromPending?'checked':''}>
-              Formalizar desde producto pendiente
-            </label>
-            ${state.fromPending ? `
-              <div class="form-group" style="margin-top:15px;">
-                <label>Seleccionar Venta Informal</label>
-                <select name="pending_id" class="form-input" onchange="window.fillFromPending(this.value)" required>
-                  <option value="">Selecciona producto vendido...</option>
-                  ${state.pendingProducts.map(p => `<option value="${p.id}">${p.name} (${formatCurrency(p.price)})</option>`).join('')}
-                </select>
+    ${state.activeModal === 'new_product' ? (() => {
+      const selP = state.fromPending && state.selectedPendingProductId ? state.pendingProducts.find(p => p.id === state.selectedPendingProductId) : null;
+      return `
+      <div class="modal-overlay">
+        <div class="modal-card card" style="max-width:450px;">
+          <div class="modal-close" onclick="state.activeModal=null; state.fromPending=false; state.selectedPendingProductId=null; render()"><i data-lucide="x"></i></div>
+          <h2>Nuevo Producto Oficial</h2>
+          <p style="font-size:12px; color:var(--text-muted); margin-bottom:20px;">Registra productos con trazabilidad completa de stock y costos.</p>
+          <form onsubmit="window.saveNewProduct(event)">
+            
+            <div style="margin-bottom:20px; padding:15px; background:#f8fafc; border-radius:15px; border:1px dashed #cbd5e1;">
+              <label style="display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:700; font-size:13px; color:var(--primary);">
+                <input type="checkbox" onchange="state.fromPending=this.checked; if(!this.checked) state.selectedPendingProductId=null; render()" ${state.fromPending?'checked':''}>
+                Formalizar desde producto pendiente
+              </label>
+              ${state.fromPending ? `
+                <div class="form-group" style="margin-top:15px;">
+                  <label>Seleccionar Venta Informal</label>
+                  <select name="pending_id" class="form-input" onchange="state.selectedPendingProductId=this.value; window.fillFromPending(this.value)" required>
+                    <option value="">Selecciona producto vendido...</option>
+                    ${state.pendingProducts.map(p => `<option value="${p.id}" ${state.selectedPendingProductId === p.id ? 'selected' : ''}>${p.name} (${formatCurrency(p.price)})</option>`).join('')}
+                  </select>
+                </div>
+              ` : ''}
+            </div>
+
+            <div class="form-group">
+              <label>Negocio / Sede</label>
+              <select name="business_id" class="form-input" required>
+                <option value="">Seleccionar sede...</option>
+                ${state.businesses
+                  .filter(b => !['Mi Primer Negocio', 'Mi Negocio Principal', 'Billar', 'Local ropa', 'Droguería', 'Restaurante'].includes(b.name))
+                  .map(b => `<option value="${b.id}" ${state.currentBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label>Nombre del Producto</label>
+              <input type="text" name="name" id="new-prod-name" value="${selP ? selP.name : ''}" class="form-input" placeholder="Ej: Camisa Polo XL" required>
+            </div>
+            
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+              <div class="form-group">
+                <label>Precio de Venta</label>
+                <input type="number" name="price" id="new-prod-price" value="${selP ? selP.price : ''}" class="form-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
               </div>
-            ` : ''}
-          </div>
-
-          <div class="form-group">
-            <label>Negocio / Sede</label>
-            <select name="business_id" class="form-input" required>
-              <option value="">Seleccionar sede...</option>
-              ${state.businesses
-                .filter(b => !['Mi Primer Negocio', 'Mi Negocio Principal', 'Billar', 'Local ropa', 'Droguería', 'Restaurante'].includes(b.name))
-                .map(b => `<option value="${b.id}" ${state.currentBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
-            </select>
-          </div>
-
-          <div class="form-group">
-            <label>Nombre del Producto</label>
-            <input type="text" name="name" id="new-prod-name" class="form-input" placeholder="Ej: Camisa Polo XL" required>
-          </div>
-          
-          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
-            <div class="form-group">
-              <label>Precio de Venta</label>
-              <input type="number" name="price" id="new-prod-price" class="form-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
+              <div class="form-group">
+                <label>Costo Base</label>
+                <input type="number" name="cost" id="new-prod-cost" class="form-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
+              </div>
             </div>
-            <div class="form-group">
-              <label>Costo Base</label>
-              <input type="number" name="cost" id="new-prod-cost" class="form-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
+
+            <div id="margin-badge" style="font-size:11px; font-weight:800; padding:8px; border-radius:8px; background:#f1f5f9; text-align:center; margin-bottom:15px; color:var(--text-muted);">
+              Margen Estimado: 0%
             </div>
-          </div>
 
-          <div id="margin-badge" style="font-size:11px; font-weight:800; padding:8px; border-radius:8px; background:#f1f5f9; text-align:center; margin-bottom:15px; color:var(--text-muted);">
-            Margen Estimado: 0%
-          </div>
-
-          <div class="form-group">
-            <label>Stock Inicial</label>
-            <input type="number" name="stock" class="form-input" placeholder="0" required min="0">
-            <p style="font-size:10px; color:var(--text-muted); margin-top:5px;">Se generará un movimiento de entrada automáticamente.</p>
-          </div>
-          
-          <button class="btn-primary" style="width:100%; margin-top:10px; background:var(--secondary);">✅ REGISTRAR E INICIALIZAR</button>
-        </form>
-      </div>
-    </div>` : ''}
+            <div class="form-group">
+              <label>Stock Inicial</label>
+              <input type="number" name="stock" class="form-input" placeholder="0" required min="0">
+              <p style="font-size:10px; color:var(--text-muted); margin-top:5px;">Se generará un movimiento de entrada automáticamente.</p>
+            </div>
+            
+            <button class="btn-primary" style="width:100%; margin-top:10px; background:var(--secondary);">✅ REGISTRAR E INICIALIZAR</button>
+          </form>
+        </div>
+      </div>`;
+    })() : ''}
     ${state.activeModal === 'edit_rate' ? `
     <div class="modal-overlay">
       <div class="modal-card card" style="max-width:400px;">
@@ -3066,48 +3069,14 @@ window.saveQuickSale = async (e) => {
   }
 };
 
-window.convertToRealProduct = async (pendingId) => {
-  const p = state.pendingProducts.find(item => item.id === pendingId);
-  if (!p) return;
+window.convertToRealProduct = (pendingId) => {
+  const pending = state.pendingProducts.find(p => p.id === pendingId);
+  if (!pending) return;
 
-  const cost = prompt(`Â¿Cuál es el COSTO base para "${p.name}"?`, "0");
-  if (cost === null) return;
-
-  try {
-    state.loading = true;
-    render();
-
-    // 1. Crear producto real
-    const { data: product, error: prodErr } = await supabase.from('products').insert({
-      name: p.name,
-      price: p.price,
-      cost: parseFloat(cost),
-      stock: 0 // Empezamos en 0, las ventas informales ya ocurrieron
-    }).select().single();
-
-    if (prodErr) throw prodErr;
-
-    // 2. Actualizar sale_items asociados
-    const { error: updateErr } = await supabase.from('sale_items')
-      .update({ product_id: product.id })
-      .eq('sale_id', p.sale_id)
-      .is('product_id', null);
-
-    if (updateErr) throw updateErr;
-
-    // 3. Eliminar de pendientes
-    await supabase.from('pending_products').delete().eq('id', pendingId);
-
-    alert('Producto formalizado con éxito');
-    await window.fetchData();
-    render();
-  } catch (err) {
-    console.error(err);
-    alert('Error al formalizar producto: ' + err.message);
-  } finally {
-    state.loading = false;
-    render();
-  }
+  state.fromPending = true;
+  state.selectedPendingProductId = pendingId;
+  state.activeModal = 'new_product';
+  render();
 };
 
 window.saveExpense = async (e) => {
@@ -3405,6 +3374,7 @@ window.saveNewProduct = async (e) => {
     window.showToast('✅ Producto formalizado con éxito', 'success');
     state.activeModal = null;
     state.fromPending = false;
+    state.selectedPendingProductId = null;
     await window.fetchData();
     render();
   } catch (err) {
