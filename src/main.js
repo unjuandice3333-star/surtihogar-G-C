@@ -82,7 +82,7 @@ window.fetchData = async () => {
         supabase.from('shifts').select('*, businesses(name)').order('start_time', { ascending: false }),
         supabase.from('users').select('*').neq('role', 'admin'),
         supabase.from('sales').select('*, users(name)').order('created_at', { ascending: false }).limit(200),
-        supabase.from('sale_items').select('*, products(name)'),
+        supabase.from('sale_items').select('*, products(name, business_id)'),
         supabase.from('pending_products').select('*').order('created_at', { ascending: false })
       ]);
       state.shifts = shRes.data || [];
@@ -845,6 +845,7 @@ const render = () => {
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:20px; margin-bottom:30px;">
           <button onclick="state.activeModal='sale';render()" class="btn-primary" style="padding:20px; background:var(--secondary); font-size:13px;">+ REGISTRAR VENTA</button>
           <button onclick="state.activeModal='expense';render()" class="btn-primary" style="padding:20px; font-size:13px;">+ REGISTRAR GASTO</button>
+          <button onclick="state.view='sales_history_admin';render()" class="btn-primary" style="padding:20px; background:linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="shopping-bag" style="width:16px;"></i> AUDITAR VENTAS</button>
           <button onclick="state.view='products_admin';render()" class="btn-primary" style="padding:20px; background:#475569; font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="package" style="width:16px;"></i> GESTIÓN PRODUCTOS</button>
           <button onclick="window.fetchSuppliers()" class="btn-primary" style="padding:20px; background:#0d9488; font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="truck" style="width:16px;"></i> PROVEEDORES</button>
           <button onclick="window.fetchLogs('attendance_admin')" class="btn-primary" style="padding:20px; background:#10b981; font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="map-pin" style="width:16px;"></i> ASISTENCIA GPS</button>
@@ -1970,6 +1971,130 @@ const render = () => {
             </div>
           </div>
 
+        </div>
+      </div>
+    `;
+  }
+
+  else if (state.view === 'sales_history_admin') {
+    html = `
+      <header class="main-header">
+        <div class="logo-container">
+          <div class="logo-icon"><img src="logo_v3.png" alt="Logo"></div>
+          <div class="header-title">
+            <p class="role-tag" style="background:var(--primary);">Auditoría Central</p>
+            <h1>Historial de Ventas</h1>
+          </div>
+        </div>
+        <div class="header-actions">
+          <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px; font-weight:700; display:flex; align-items:center; gap:5px;"><i data-lucide="arrow-left" style="width:14px;"></i> VOLVER</button>
+        </div>
+      </header>
+
+      <div class="container" style="max-width:1200px; padding-top:20px;">
+        <div class="card" style="padding:0; overflow:hidden; border-radius:20px; box-shadow: var(--shadow-lg);">
+          <div style="padding:20px 24px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; background:linear-gradient(to right, #f8fafc, #ffffff);">
+            <div>
+              <h3 style="font-size:18px; font-weight:800; color:#1e293b;">Listado Detallado de Movimientos</h3>
+              <p style="font-size:12px; color:#64748b; margin-top:2px;">Auditoría por Local Operativo y Producto Vendido</p>
+            </div>
+            <div style="background:var(--secondary); color:white; font-weight:800; font-size:12px; padding:6px 14px; border-radius:30px;">
+              ${state.sales.length} Ventas
+            </div>
+          </div>
+
+          <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:13px; min-width:850px;">
+              <thead>
+                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
+                  <th style="padding:16px 20px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Referencia / Fecha</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Vendedor</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Negocio / Local</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Detalle de Productos</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px; text-align:center;">Método</th>
+                  <th style="padding:16px 20px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px; text-align:right;">Monto Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${state.sales.length === 0 ? `
+                  <tr><td colspan="6" style="padding:80px; text-align:center; color:#94a3b8;">
+                    <div style="font-size:40px; margin-bottom:15px;">📦</div> Sin ventas registradas en el sistema todavía.
+                  </td></tr>
+                ` : state.sales.map(sale => {
+                  const items = state.saleItems.filter(si => si.sale_id === sale.id);
+                  
+                  // 🏢 Atribución Avanzada del Negocio (Doble Verificación: Producto y Transacciones vinculadas)
+                  const bizIdsFromProducts = items.map(i => i.products?.business_id).filter(Boolean);
+                  const saleShortId = sale.id.slice(0,5);
+                  const bizIdsFromTransactions = state.transactions
+                    .filter(t => t.note && t.note.includes(saleShortId))
+                    .map(t => t.business_id);
+                  
+                  const allBizIds = [...new Set([...bizIdsFromProducts, ...bizIdsFromTransactions])];
+                  const bizNames = allBizIds.map(id => state.businesses.find(b => b.id === id)?.name || 'General');
+
+                  // 🛍️ Render de Productos (soporta productos del inventario y ventas rápidas no formalizadas)
+                  const itemsHtml = items.map(i => {
+                    let prodName = i.products?.name;
+                    let pendingBadge = '';
+                    
+                    if (!prodName) {
+                       const pending = state.pendingProducts.find(pp => pp.sale_id === sale.id);
+                       if (pending) {
+                          prodName = pending.name;
+                          pendingBadge = '<span style="background:#fff7ed; color:#c2410c; font-size:9px; font-weight:800; padding:1px 4px; border-radius:4px; border:1px solid #fed7aa; margin-left:4px;">POR ASIGNAR</span>';
+                       } else if (sale.note && sale.note.includes('Venta informal')) {
+                          prodName = sale.note.replace('Venta informal: ', '');
+                       } else {
+                          prodName = 'Producto Especial';
+                       }
+                    }
+
+                    return `
+                      <div style="display:flex; justify-content:space-between; margin-bottom:6px; padding-bottom:6px; border-bottom:1px dashed #e2e8f0; gap:10px; line-height:1.3;">
+                        <span style="font-weight:600; color:#334155;">
+                          ${prodName} ${pendingBadge}
+                          <span style="color:#94a3b8; font-weight:700; margin-left:3px;">(x${i.quantity})</span>
+                        </span>
+                        <span style="font-weight:700; color:#64748b; font-family:monospace;">${formatCurrency(i.price)}</span>
+                      </div>
+                    `;
+                  }).join('');
+
+                  return `
+                    <tr style="border-bottom:1px solid #f1f5f9; background:white; transition:background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
+                      <td style="padding:18px 20px; vertical-align:top;">
+                        <div style="font-weight:800; color:#0f172a; font-family:monospace; background:#f1f5f9; padding:3px 6px; border-radius:6px; display:inline-block; font-size:11px;">#${sale.id.slice(0,8).toUpperCase()}</div>
+                        <div style="font-size:11px; color:#64748b; margin-top:6px; display:flex; align-items:center; gap:4px;"><i data-lucide="calendar" style="width:11px;"></i> ${new Date(sale.created_at).toLocaleString('es-CO', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})}</div>
+                      </td>
+                      <td style="padding:18px; vertical-align:top;">
+                        <div style="display:flex; align-items:center; gap:10px;">
+                          <div style="width:32px; height:32px; background:#e0f2fe; color:#0369a1; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; flex-shrink:0;">${(sale.users?.name || 'U').slice(0,2).toUpperCase()}</div>
+                          <div style="font-weight:700; color:#334155; font-size:13px;">${sale.users?.name || 'Sistema'}</div>
+                        </div>
+                      </td>
+                      <td style="padding:18px; vertical-align:top;">
+                        <div style="display:flex; flex-wrap:wrap; gap:4px;">
+                          ${bizNames.length > 0 ? bizNames.map(n => `<span style="background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; font-size:11px; font-weight:800; padding:3px 8px; border-radius:8px; white-space:nowrap;">🏬 ${n}</span>`).join('') : `<span style="background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; font-size:11px; font-weight:800; padding:3px 8px; border-radius:8px;">📦 Sin Atribuir</span>`}
+                        </div>
+                      </td>
+                      <td style="padding:18px; min-width:280px; vertical-align:top;">
+                        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:12px; font-size:12px;">
+                          ${itemsHtml || '<span style="font-style:italic; color:#94a3b8;">Sin detalle cargado</span>'}
+                        </div>
+                      </td>
+                      <td style="padding:18px; text-align:center; vertical-align:top;">
+                        <span style="background:#f8fafc; color:#475569; font-weight:800; font-size:11px; padding:4px 10px; border-radius:20px; border:1px solid #e2e8f0; white-space:nowrap;">${sale.payment_method || 'Efectivo'}</span>
+                      </td>
+                      <td style="padding:18px 20px; text-align:right; vertical-align:top;">
+                        <div style="font-weight:900; color:var(--success); font-size:15px; font-family:monospace;">${formatCurrency(sale.total)}</div>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     `;
