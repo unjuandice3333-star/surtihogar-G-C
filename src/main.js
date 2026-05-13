@@ -81,7 +81,7 @@ window.fetchData = async () => {
       const [shRes, empRes, salesRes, itemsRes, pendingRes] = await Promise.all([
         supabase.from('shifts').select('*, businesses(name)').order('start_time', { ascending: false }),
         supabase.from('users').select('*').neq('role', 'admin'),
-        supabase.from('sales').select('*, users(name)').order('created_at', { ascending: false }).limit(200),
+        supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('sale_items').select('*, products(name, business_id)'),
         supabase.from('pending_products').select('*').order('created_at', { ascending: false })
       ]);
@@ -2033,6 +2033,10 @@ const render = () => {
                   const allBizIds = [...new Set([...bizIdsFromProducts, ...bizIdsFromTransactions])];
                   const bizNames = allBizIds.map(id => state.businesses.find(b => b.id === id)?.name || 'General');
 
+                  // 👤 Resolución de Vendedor en Memoria para Evitar Dependencias de Relaciones en BD
+                  const sellerObj = state.employees?.find(emp => emp.id === sale.user_id) || (state.user?.id === sale.user_id ? state.user : null);
+                  const sellerName = sellerObj?.name || 'Sistema';
+
                   // 🛍️ Render de Productos (soporta productos del inventario y ventas rápidas no formalizadas)
                   const itemsHtml = items.map(i => {
                     let prodName = i.products?.name;
@@ -2069,8 +2073,8 @@ const render = () => {
                       </td>
                       <td style="padding:18px; vertical-align:top;">
                         <div style="display:flex; align-items:center; gap:10px;">
-                          <div style="width:32px; height:32px; background:#e0f2fe; color:#0369a1; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; flex-shrink:0;">${(sale.users?.name || 'U').slice(0,2).toUpperCase()}</div>
-                          <div style="font-weight:700; color:#334155; font-size:13px;">${sale.users?.name || 'Sistema'}</div>
+                          <div style="width:32px; height:32px; background:#e0f2fe; color:#0369a1; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; flex-shrink:0;">${(sellerName).slice(0,2).toUpperCase()}</div>
+                          <div style="font-weight:700; color:#334155; font-size:13px;">${sellerName}</div>
                         </div>
                       </td>
                       <td style="padding:18px; vertical-align:top;">
