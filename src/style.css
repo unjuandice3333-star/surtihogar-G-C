@@ -438,3 +438,18 @@ select.form-input {
   .header-actions { gap: 6px; }
   .icon-btn { width: 40px; height: 40px; border-radius: 10px; }
 }
+
+/* Responsive Supplier Dashboard Utilities */
+.supplier-grid {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 25px;
+  margin-bottom: 30px;
+}
+
+@media (max-width: 768px) {
+  .supplier-grid {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+}

@@ -1745,7 +1745,7 @@ const render = () => {
           </div>
         </div>
 
-        <div style="display:grid; grid-template-columns: 1fr 2fr; gap:25px; margin-bottom:30px;">
+        <div class="supplier-grid">
           <!-- ADD / EDIT FORM -->
           <div class="card">
             <h3 style="font-size:16px; font-weight:700; margin-bottom:15px; color:#1e293b;">
@@ -1791,7 +1791,7 @@ const render = () => {
           </div>
 
           <!-- LIST TABLE -->
-          <div class="card" style="padding:0; overflow:hidden;">
+          <div class="card" style="padding:0; overflow:hidden; min-width:0;">
             <div style="padding:20px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center;">
               <h3 style="font-size:16px; font-weight:700; margin:0; color:#1e293b;">Proveedores Registrados</h3>
             </div>
