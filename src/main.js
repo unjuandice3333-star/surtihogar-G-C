@@ -585,15 +585,37 @@ window.showShiftReport = (timeframe = 'daily') => {
   const now = new Date();
   state.shiftReportTimeframe = timeframe;
 
+  // A. Establecer hora base por defecto (hoy a la medianoche)
   let startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
-  if (timeframe === 'weekly') {
+  
+  // B. Sincronización Inteligente de Turno Nocturno:
+  // Si es reporte diario, verificamos si hay un turno activo para este usuario hoy y ajustamos 
+  // el filtro de fecha a la HORA REAL DE INICIO del turno (para no perder transacciones nocturnas previas a medianoche!).
+  if (timeframe === 'daily') {
+    const activeUserShift = (state.shifts || []).find(s => {
+      const targetUserId = state.user?.role === 'admin' ? s.user_id : state.user?.id;
+      const isUserMatch = s.user_id === targetUserId;
+      const sStart = new Date(s.start_time);
+      const sEnd = new Date(s.end_time);
+      // Turnos activos o completados el día de hoy
+      return isUserMatch && now >= new Date(sStart.getTime() - 60 * 60 * 1000) && now <= new Date(sEnd.getTime() + 60 * 60 * 1000);
+    });
+    if (activeUserShift) {
+      startDate = new Date(activeUserShift.start_time);
+    }
+  } else if (timeframe === 'weekly') {
     startDate = new Date(now.getTime() - (7 * 24 * 60 * 60 * 1000));
   } else if (timeframe === 'monthly') {
     startDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0);
   }
 
-  // Filtrar movimientos del usuario del turno según el periodo
-  const myTrx = state.transactions.filter(t => t.user_id === state.user?.id && new Date(t.date) >= startDate);
+  // C. Visibilidad Inteligente por Rol:
+  // Los colaboradores ven solo SUS transacciones. Los administradores auditan TODO el negocio activo.
+  const myTrx = state.transactions.filter(t => {
+    const isRoleMatch = (state.user?.role === 'admin') ? true : (t.user_id === state.user?.id);
+    const isDateMatch = new Date(t.date) >= startDate;
+    return isRoleMatch && isDateMatch;
+  });
 
   const totalSales = myTrx.filter(t => t.type === 'income').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
   const totalExpenses = myTrx.filter(t => t.type === 'expense').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
