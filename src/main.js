@@ -849,6 +849,7 @@ const render = () => {
                 ${state.currentBusinessId !== 'all' ? `
                   <button onclick="window.setBusinessLocation()" class="btn-secondary" style="padding:8px 12px; font-size:11px; height:40px; background:#eff6ff; border:1px solid #dbeafe; color:#1d4ed8; font-weight:700;" title="Guardar ubicación actual del GPS como centro del negocio"><i data-lucide="map-pin" style="width:14px; margin-right:4px;"></i> FIJAR GPS</button>
                 ` : ''}
+                <button onclick="window.purgeStagingData()" class="btn-secondary" style="padding:8px 12px; font-size:11px; height:40px; background:#fef2f2; border:1px solid #fee2e2; color:#dc2626; font-weight:700; display:flex; align-items:center; gap:4px;" title="Borrar datos de prueba y preparar producción"><i data-lucide="trash-2" style="width:14px;"></i> LIMPIAR PRUEBAS</button>
                 <button onclick="state.activeModal='new_business';window.render()" class="btn-primary" style="padding:8px 12px; font-size:11px; height:40px; background:var(--primary); border:none; font-weight:700; display:flex; align-items:center; gap:4px;" title="Crear un nuevo negocio o sucursal"><i data-lucide="plus" style="width:14px;"></i> NUEVA SEDE</button>
                 <select onchange="window.filterByBusiness(this.value)" class="form-input" style="width:auto; height:40px; font-size:12px;">
                   <option value="all" ${state.currentBusinessId === 'all' ? 'selected' : ''}>Todos los negocios</option>
@@ -3500,6 +3501,58 @@ window.testStockManagement = async () => {
 
   } catch (err) {
     window.logQa("Carga Inventario", "FAILED", err.message);
+  }
+};
+
+window.purgeStagingData = async () => {
+  if (!confirm("🚨 ¡ADVERTENCIA CRÍTICA DE PRODUCCIÓN!\n\nEsta acción eliminará permanentemente:\n- TODOS los turnos de prueba\n- TODOS los productos e inventarios creados hasta hoy\n- TODAS las ventas, movimientos y gastos registrados.\n\n¿Estás 100% seguro de que deseas vaciar la base de datos para empezar de cero?")) return;
+  
+  const secondConfirm = prompt("Escribe 'BORRAR' en mayúsculas para confirmar la purga definitiva de la base de datos:");
+  if (secondConfirm !== 'BORRAR') {
+    window.showToast("Operación cancelada", "info");
+    return;
+  }
+
+  state.loading = true;
+  window.render();
+
+  try {
+    window.showToast("⏳ Iniciando purga de datos relacionales...", "info");
+    
+    // 1. Detalle de Ventas (sale_items)
+    const { error: e1 } = await supabase.from('sale_items').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (e1) throw e1;
+    
+    // 2. Movimientos de Kárdex (inventory_movements)
+    const { error: e2 } = await supabase.from('inventory_movements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (e2) throw e2;
+    
+    // 3. Transacciones de Caja (transactions)
+    const { error: e3 } = await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (e3) throw e3;
+
+    // 4. Turnos Abiertos/Cerrados (shifts)
+    const { error: e4 } = await supabase.from('shifts').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (e4) throw e4;
+
+    // 5. Catálogo de Productos (products)
+    const { error: e5 } = await supabase.from('products').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (e5) throw e5;
+
+    // 6. Latidos BYOD (device_heartbeats)
+    await supabase.from('device_heartbeats').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+    // 7. Logs Generales (system_logs)
+    await supabase.from('system_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+
+    window.showToast("🎯 BASE DE DATOS LIMPIA. Lista para producción absoluta.", "success");
+    
+  } catch(err) {
+    console.error("Purge execution error:", err);
+    window.showToast("❌ Error crítico de base de datos: " + err.message, "danger");
+  } finally {
+    state.loading = false;
+    await window.fetchData();
   }
 };
 
