@@ -3548,3 +3548,29 @@ window.setBusinessLocation = async () => {
     render();
   }
 };
+
+// 🛡️ MONITOR DE COMPORTAMIENTO Y PRODUCTIVIDAD (Stealth Audit)
+// Detecta si el empleado sale de la app, abre redes sociales, o minimiza el sistema durante su turno
+document.addEventListener('visibilitychange', async () => {
+  if (state.user && state.user.role !== 'admin' && state.hasActiveAttendance) {
+     const isHidden = document.visibilityState === 'hidden';
+     const type = isHidden ? 'APP_MINIMIZED' : 'APP_RESUMED';
+     const text = isHidden 
+        ? "⚠️ FUERA DE APP: El colaborador salió de la pantalla o bloqueó el dispositivo durante su turno."
+        : "ℹ️ REINGRESO: El colaborador volvió a abrir la aplicación del negocio.";
+
+     try {
+        await supabase.from('system_logs').insert({
+           type: 'PRODUCTIVITY_AUDIT',
+           module: 'Seguridad',
+           user_id: state.user.id,
+           message: JSON.stringify({
+              text: text,
+              context: { action: type, timestamp: new Date().toISOString() }
+           })
+        });
+     } catch (e) {
+        console.warn("Fallo al enviar reporte de productividad:", e);
+     }
+  }
+});
