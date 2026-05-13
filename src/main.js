@@ -1694,9 +1694,21 @@ const render = () => {
   }
   
   else if (state.view === 'suppliers_admin') {
-    const totalSuppliers = (state.suppliers || []).length;
-    const totalDebt = (state.suppliers || []).reduce((s, sup) => s + (parseFloat(sup.debt) || 0), 0);
-    const totalCash = (state.suppliers || []).reduce((s, sup) => s + (parseFloat(sup.cash_purchases) || 0), 0);
+    const suppliersList = state.suppliers || [];
+    const totalSuppliers = suppliersList.length;
+    const totalDebt = suppliersList.reduce((s, sup) => s + (parseFloat(sup.debt) || 0), 0);
+    const totalCash = suppliersList.reduce((s, sup) => s + (parseFloat(sup.cash_purchases) || 0), 0);
+
+    // 👑 Cálculo en Tiempo Real del Proveedor Estrella
+    let topSupplierName = 'Ninguno';
+    let maxVol = -1;
+    suppliersList.forEach(s => {
+      const vol = (parseFloat(s.cash_purchases) || 0) + (parseFloat(s.debt) || 0);
+      if (vol > maxVol && vol > 0) {
+        maxVol = vol;
+        topSupplierName = s.name;
+      }
+    });
 
     html = `
       <header class="main-header">
@@ -1714,7 +1726,7 @@ const render = () => {
 
       <div class="container">
         <!-- Summary Cards -->
-        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:20px; margin-bottom:25px;">
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:20px; margin-bottom:25px;">
           <div class="card" style="text-align:center; border-left:5px solid #0d9488;">
             <p style="font-size:11px; color:var(--text-muted); font-weight:700;">TOTAL PROVEEDORES</p>
             <p style="font-size:24px; font-weight:800; color:#0d9488; margin-top:8px;">${totalSuppliers}</p>
@@ -1726,6 +1738,10 @@ const render = () => {
           <div class="card" style="text-align:center; border-left:5px solid var(--success);">
             <p style="font-size:11px; color:var(--text-muted); font-weight:700;">COMPRAS DE CONTADO</p>
             <p style="font-size:24px; font-weight:800; color:var(--success); margin-top:8px;">${formatCurrency(totalCash)}</p>
+          </div>
+          <div class="card" style="text-align:center; border-left:5px solid #6366f1; background:linear-gradient(to right, #ffffff, #f5f3ff);">
+            <p style="font-size:11px; color:var(--text-muted); font-weight:700; display:flex; align-items:center; justify-content:center; gap:4px;"><i data-lucide="crown" style="width:12px; color:#6366f1;"></i> PROVEEDOR ESTRELLA</p>
+            <p style="font-size:18px; font-weight:900; color:#6366f1; margin-top:10px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="${topSupplierName}">${topSupplierName}</p>
           </div>
         </div>
 
@@ -1794,8 +1810,17 @@ const render = () => {
                   ${(state.suppliers || []).length === 0 ? '<tr><td colspan="5" style="padding:40px; text-align:center; color:var(--text-muted);">Sin proveedores registrados</td></tr>' : (state.suppliers || []).map((s, idx) => `
                     <tr style="border-bottom:1px solid #f1f5f9;">
                       <td style="padding:15px;">
-                        <p style="font-weight:700; color:#1e293b; margin:0;">${s.name}</p>
-                        <p style="font-size:11px; color:var(--text-muted); margin-top:2px;">📞 ${s.phone || 'Sin número'}</p>
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+                          <div>
+                            <p style="font-weight:700; color:#1e293b; margin:0;">${s.name}</p>
+                            <p style="font-size:11px; color:var(--text-muted); margin-top:2px; display:flex; align-items:center; gap:4px;"><i data-lucide="phone" style="width:10px;"></i> ${s.phone || 'Sin número'}</p>
+                          </div>
+                          ${s.phone ? `
+                            <a href="https://wa.me/57${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent('Hola ' + s.name + ', te saludamos desde Surtihogar G&C. Nos gustaría coordinar un pedido de mercancía para nuestro inventario. ¿Nos podrías confirmar disponibilidad? Quedamos atentos. ¡Muchas gracias!')}" target="_blank" style="background:#22c55e; color:white; padding:5px 10px; border-radius:20px; font-size:10px; font-weight:800; display:inline-flex; align-items:center; gap:4px; text-decoration:none; box-shadow:0 4px 6px -1px rgba(34,197,94,0.3); transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                              <i data-lucide="message-circle" style="width:12px; height:12px;"></i> PEDIR
+                            </a>
+                          ` : ''}
+                        </div>
                       </td>
                       <td style="padding:15px; font-size:12px; color:#475569; max-width:180px; overflow:hidden; text-overflow:ellipsis;">
                         ${s.products_sold || 'Varios'}
