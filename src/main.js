@@ -78,18 +78,20 @@ window.fetchData = async () => {
 
     // 5. Cargas Administrativas o de Colaborador (Turnos)
     if (state.user.role === 'admin') {
-      const [shRes, empRes, salesRes, itemsRes, pendingRes] = await Promise.all([
+      const [shRes, empRes, salesRes, itemsRes, pendingRes, loadedSuppliers] = await Promise.all([
         supabase.from('shifts').select('*, businesses(name)').order('start_time', { ascending: false }),
         supabase.from('users').select('*').neq('role', 'admin'),
         supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('sale_items').select('*, products(name, business_id)'),
-        supabase.from('pending_products').select('*').order('created_at', { ascending: false })
+        supabase.from('pending_products').select('*').order('created_at', { ascending: false }),
+        SupplierService.loadAll(state.user.id)
       ]);
       state.shifts = shRes.data || [];
       state.employees = empRes.data || [];
       state.sales = salesRes.data || [];
       state.saleItems = itemsRes.data || [];
       state.pendingProducts = pendingRes.data || [];
+      state.suppliers = loadedSuppliers || [];
     } else {
       const [shRes, attRes] = await Promise.all([
         supabase.from('shifts').select('*').eq('user_id', session.user.id),
@@ -2675,6 +2677,28 @@ const render = () => {
               <label>Nombre del Producto</label>
               <input type="text" name="name" id="new-prod-name" value="${selP ? selP.name : ''}" class="form-input" placeholder="Ej: Camisa Polo XL" required>
             </div>
+
+            <div class="form-group">
+              <label>Proveedor Asociado (Opcional)</label>
+              <select name="supplier_index" class="form-input" onchange="window.toggleNewSupplierField(this.value)">
+                <option value="">(Ninguno / Sin Asignar)</option>
+                <option value="NEW_SUPPLIER" style="font-weight:bold; color:var(--primary);">➕ + NUEVO PROVEEDOR EN EL ACTO...</option>
+                ${(state.suppliers || []).map((sup, index) => `<option value="${index}">${sup.name}</option>`).join('')}
+              </select>
+            </div>
+
+            <!-- Bloque para crear un proveedor rápido si no existe -->
+            <div id="quick-supplier-block" style="display:none; padding:15px; border:1px solid #e2e8f0; border-radius:12px; background:#f8fafc; margin-top:-10px; margin-bottom:15px;">
+              <p style="font-size:11px; font-weight:800; margin-bottom:10px; color:#475569; text-transform:uppercase; letter-spacing:0.5px;">📦 Registro Rápido de Proveedor</p>
+              <div class="form-group" style="margin-bottom:10px;">
+                <label style="font-size:11px; font-weight:600; margin-bottom:4px;">Nombre del Nuevo Proveedor</label>
+                <input type="text" name="new_supplier_name" class="form-input" placeholder="Ej: Mayorista Principal S.A." style="height:38px;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:11px; font-weight:600; margin-bottom:4px;">Teléfono de Contacto (Opcional)</label>
+                <input type="tel" name="new_supplier_phone" class="form-input" placeholder="Ej: 3210000000" style="height:38px;">
+              </div>
+            </div>
             
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
               <div class="form-group">
@@ -3403,6 +3427,13 @@ window.fillFromPending = (id) => {
   window.updateMarginCalc();
 };
 
+window.toggleNewSupplierField = (val) => {
+  const block = document.getElementById('quick-supplier-block');
+  if (block) {
+    block.style.display = val === 'NEW_SUPPLIER' ? 'block' : 'none';
+  }
+};
+
 window.saveNewProduct = async (e) => {
   e.preventDefault();
   const btn = e.target.querySelector('button');
@@ -3420,7 +3451,34 @@ window.saveNewProduct = async (e) => {
     const busId = formData.get('business_id');
     const pendingId = formData.get('pending_id');
 
+    const supplierIndex = formData.get('supplier_index');
+    const newSupplierName = formData.get('new_supplier_name')?.trim();
+    const newSupplierPhone = formData.get('new_supplier_phone')?.trim();
+
     if (!busId) throw new Error("Debes seleccionar una sede para este producto.");
+
+    // A. Vincular Proveedor (Mantener al día qué vende cada proveedor automáticamente)
+    let supplierNameForNote = '';
+    if (supplierIndex === 'NEW_SUPPLIER' && newSupplierName) {
+      state.suppliers = state.suppliers || [];
+      state.suppliers.push({
+        name: newSupplierName,
+        phone: newSupplierPhone || '',
+        products_sold: name,
+        debt: 0,
+        cash_purchases: 0
+      });
+      await window.saveSuppliers();
+      supplierNameForNote = newSupplierName;
+    } else if (supplierIndex !== "" && supplierIndex !== null && state.suppliers && state.suppliers[supplierIndex]) {
+      const sup = state.suppliers[supplierIndex];
+      let curr = (sup.products_sold || "").trim();
+      if (!curr.toLowerCase().includes(name.toLowerCase())) {
+        sup.products_sold = curr ? (curr + ", " + name) : name;
+      }
+      await window.saveSuppliers();
+      supplierNameForNote = sup.name;
+    }
 
     // 1. Crear el producto (Stock inicial siempre 0 para trazabilidad vía movement)
     const { data: prod, error: pErr } = await supabase.from('products').insert({
@@ -3438,7 +3496,7 @@ window.saveNewProduct = async (e) => {
         quantity: stock,
         cost: cost,
         user_id: state.user.id,
-        note: 'Stock inicial en registro oficial'
+        note: supplierNameForNote ? `Stock inicial - Prov: ${supplierNameForNote}` : 'Stock inicial en registro oficial'
       });
       if (mErr) throw mErr;
     }
