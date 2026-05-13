@@ -135,7 +135,7 @@ window.fetchData = async () => {
     
     if (finalFilterId) {
        const activeBiz = state.businesses.find(b => b.id === finalFilterId);
-       const clusterKeywords = ['electro', 'mueble', 'ropa', 'baratillo', 'pañalera'];
+       const clusterKeywords = ['electro', 'mueble', 'ropa', 'pañalera'];
        const isCentralHub = activeBiz && clusterKeywords.some(kw => activeBiz.name?.toLowerCase().includes(kw));
 
        if (isCentralHub) {
