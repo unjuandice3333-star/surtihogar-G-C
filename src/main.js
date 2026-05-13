@@ -1735,7 +1735,7 @@ const render = () => {
         </div>
       </header>
 
-      <div class="container">
+      <div class="container" style="max-width: 1300px;">
         <!-- Summary Cards -->
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:20px; margin-bottom:25px;">
           <div class="card" style="text-align:center; border-left:5px solid #0d9488;">
