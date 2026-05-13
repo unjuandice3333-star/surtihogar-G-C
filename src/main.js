@@ -1795,7 +1795,8 @@ const render = () => {
             <div style="padding:20px; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center;">
               <h3 style="font-size:16px; font-weight:700; margin:0; color:#1e293b;">Proveedores Registrados</h3>
             </div>
-            <div style="overflow-x:auto;">
+            <!-- DESKTOP VIEW: ANALYTICAL TABLE -->
+            <div class="desktop-supplier-table" style="overflow-x:auto;">
               <table style="width:100%; border-collapse:collapse; font-size:13px;">
                 <thead style="background:#f8fafc; color:var(--text-muted); text-align:left;">
                   <tr>
@@ -1841,6 +1842,54 @@ const render = () => {
                   `).join('')}
                 </tbody>
               </table>
+            </div>
+
+            <!-- MOBILE VIEW: PREMIUM TOUCH CARDS -->
+            <div class="mobile-supplier-cards">
+              ${(state.suppliers || []).length === 0 ? `
+                <div style="padding:40px; text-align:center; color:var(--text-muted); background:#f8fafc; border-radius:16px; border:1px dashed #cbd5e1;">Sin proveedores registrados</div>
+              ` : (state.suppliers || []).map((s, idx) => `
+                <div class="card" style="background:#ffffff; border:1px solid #e2e8f0; border-radius:20px; padding:20px; display:flex; flex-direction:column; gap:12px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.01), 0 2px 4px -1px rgba(0,0,0,0.02);">
+                  
+                  <!-- Header: Info & WhatsApp Button -->
+                  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px;">
+                    <div style="flex:1;">
+                      <p style="font-weight:800; font-size:16px; color:#0f172a; margin:0; line-height:1.2;">${s.name}</p>
+                      <p style="font-size:13px; color:var(--text-muted); margin-top:6px; display:flex; align-items:center; gap:6px;"><i data-lucide="phone" style="width:12px; height:12px;"></i> ${s.phone || 'Sin teléfono'}</p>
+                    </div>
+                    ${s.phone ? `
+                      <a href="https://wa.me/57${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent('Hola ' + s.name + ', te saludamos desde Surtihogar G&C. Nos gustaría coordinar un pedido de mercancía para nuestro inventario. ¿Nos podrías confirmar disponibilidad? Quedamos atentos. ¡Muchas gracias!')}" target="_blank" style="background:#22c55e; color:white; padding:8px 14px; border-radius:25px; font-size:11px; font-weight:850; display:inline-flex; align-items:center; gap:6px; text-decoration:none; box-shadow:0 4px 12px rgba(34,197,94,0.25); flex-shrink:0;">
+                        <i data-lucide="message-circle" style="width:14px; height:14px;"></i> PEDIR
+                      </a>
+                    ` : ''}
+                  </div>
+
+                  <!-- Sub: Products Tag View -->
+                  <div style="background:#f8fafc; padding:12px; border-radius:12px; font-size:13px; color:#475569; line-height:1.5; border:1px solid #f1f5f9;">
+                    <span style="font-weight:800; font-size:10px; color:#94a3b8; text-transform:uppercase; display:block; margin-bottom:4px; letter-spacing:0.5px;">Productos que suministra</span>
+                    ${s.products_sold || 'Varios'}
+                  </div>
+
+                  <!-- Grid: Financial Summary -->
+                  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px; padding-top:8px;">
+                    <div style="background:rgba(16,185,129,0.03); padding:10px; border-radius:10px; border:1px solid rgba(16,185,129,0.1);">
+                      <span style="font-size:10px; color:#10b981; font-weight:800; text-transform:uppercase; letter-spacing:0.5px;">Compras Contado</span>
+                      <p style="font-weight:800; color:var(--success); font-size:15px; margin-top:4px; margin-bottom:0;">${formatCurrency(s.cash_purchases || 0)}</p>
+                    </div>
+                    <div style="background:${(s.debt || 0) > 0 ? 'rgba(239,68,68,0.03)' : 'rgba(100,116,139,0.03)'}; padding:10px; border-radius:10px; border:1px solid ${(s.debt || 0) > 0 ? 'rgba(239,68,68,0.1)' : 'rgba(100,116,139,0.1)'};">
+                      <span style="font-size:10px; color:${(s.debt || 0) > 0 ? 'var(--danger)' : '#64748b'}; font-weight:800; text-transform:uppercase; letter-spacing:0.5px;">Deuda Activa</span>
+                      <p style="font-weight:800; color:${(s.debt || 0) > 0 ? 'var(--danger)' : '#64748b'}; font-size:15px; margin-top:4px; margin-bottom:0;">${formatCurrency(s.debt || 0)}</p>
+                    </div>
+                  </div>
+
+                  <!-- Actions Footer Area -->
+                  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:8px; padding-top:15px; border-top:1px solid #f1f5f9;">
+                    <button onclick="window.editSupplier('${idx}')" class="btn-secondary" style="height:42px; font-size:12px; font-weight:800; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:6px; background:#f1f5f9; border:none; color:#334155; width:100%;"><i data-lucide="edit-2" style="width:14px;"></i> EDITAR</button>
+                    <button onclick="window.deleteSupplier('${idx}')" class="btn-secondary" style="height:42px; font-size:12px; font-weight:800; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:6px; background:#fef2f2; border:none; color:var(--danger); width:100%;"><i data-lucide="trash-2" style="width:14px;"></i> ELIMINAR</button>
+                  </div>
+
+                </div>
+              `).join('')}
             </div>
           </div>
         </div>

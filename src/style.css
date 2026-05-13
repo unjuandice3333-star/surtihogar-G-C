@@ -453,3 +453,23 @@ select.form-input {
     gap: 15px;
   }
 }
+
+/* Dynamic Layout Branching (Table vs Mobile Cards) */
+.desktop-supplier-table {
+  display: block;
+}
+.mobile-supplier-cards {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .desktop-supplier-table {
+    display: none !important;
+  }
+  .mobile-supplier-cards {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+    padding: 15px;
+  }
+}
