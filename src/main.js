@@ -135,11 +135,11 @@ window.fetchData = async () => {
     
     if (finalFilterId) {
        const activeBiz = state.businesses.find(b => b.id === finalFilterId);
-       const isCentralHub = activeBiz?.name?.toLowerCase().includes('electro');
+       const clusterKeywords = ['electro', 'mueble', 'ropa', 'baratillo', 'pañalera'];
+       const isCentralHub = activeBiz && clusterKeywords.some(kw => activeBiz.name?.toLowerCase().includes(kw));
 
        if (isCentralHub) {
-          // Si el usuario está en Electrodomésticos, habilitamos ventas unificadas de Muebles, Pañalera (ropa niños), etc.
-          const clusterKeywords = ['electro', 'mueble', 'ropa niñ', 'baratillo', 'pañalera'];
+          // Habilitar inventario consolidado unificado entre todas las sedes del clúster operativo centralizado
           const clusterIds = state.businesses
             .filter(b => clusterKeywords.some(kw => b.name?.toLowerCase().includes(kw)))
             .map(b => b.id);
