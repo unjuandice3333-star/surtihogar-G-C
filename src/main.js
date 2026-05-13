@@ -2428,11 +2428,9 @@ const render = () => {
         </div>
         <div class="header-actions">
           <div style="display:flex; gap:8px; padding-right:10px; border-right:1px solid #e2e8f0; margin-right:5px;">
-            <div onclick="state.view='shifts_weekly';window.render()" class="icon-btn" title="Mi Horario"><i data-lucide="calendar"></i></div>
             ${state.user?.role === 'admin' ? `
               <div onclick="state.view='manager_dashboard';window.render()" class="icon-btn" title="Gerencia"><i data-lucide="trending-up"></i></div>
               <div onclick="state.view='business_reports';window.render()" class="icon-btn" title="Reportes por Negocio"><i data-lucide="bar-chart-2"></i></div>
-              <div onclick="state.view='qa_dashboard';window.render()" class="icon-btn" title="Pruebas QA"><i data-lucide="test-tube-2"></i></div>
             ` : ''}
             <div onclick="window.fetchData()" class="icon-btn"><i data-lucide="refresh-cw"></i></div>
           </div>
