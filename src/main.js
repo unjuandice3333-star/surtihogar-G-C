@@ -4,6 +4,8 @@ import { SupplierService } from './services/SupplierService'
 import { DatabaseService } from './services/DatabaseService'
 import { byodService } from './services/ByodComplianceService'
 import { Geolocation } from '@capacitor/geolocation'
+import jsPDF from 'jspdf'
+import 'jspdf-autotable'
 
 // Centralización de Filtros (Mejores Prácticas DRY)
 const RENTAL_BUSINESSES = ['Billar', 'Droguería', 'Local ropa', 'Restaurante'];
@@ -3471,7 +3473,7 @@ window.deleteSupplierInvoice = async (invoiceId) => {
   render();
 };
 
-window.generateSupplierPdf = () => {
+window.generateSupplierPdf = async () => {
   const idx = state.selectedSupplierIdx;
   const s = state.suppliers[idx];
   if (!s) return;
@@ -3483,102 +3485,139 @@ window.generateSupplierPdf = () => {
   if (startDate) filteredInvoices = filteredInvoices.filter(inv => inv.date >= startDate);
   if (endDate) filteredInvoices = filteredInvoices.filter(inv => inv.date <= endDate);
 
-  const printWindow = window.open('', '_blank');
-  
-  let tableRows = filteredInvoices.map(inv => {
-    const totalPaid = (inv.payments || []).reduce((sum, p) => sum + p.amount, 0);
-    const currentDebt = inv.total_amount - totalPaid;
+  try {
+    window.showToast("⏳ Construyendo documento PDF...", "info");
     
-    let abonosText = (inv.payments || []).map(p => 
-      `<div style="font-size:11px; color:#64748b; padding-left:20px;">↳ Abono: ${p.date} - <b>${formatCurrency(p.amount)}</b></div>`
-    ).join('');
+    const doc = new jsPDF();
     
-    return `
-      <tr style="border-bottom: 1px solid #e2e8f0;">
-        <td style="padding:12px;">
-          <div style="font-weight:bold; color:#1e293b;"># ${inv.invoice_number}</div>
-          <div style="font-size:11px; color:#94a3b8;">Fecha Compra: ${inv.date}</div>
-          ${abonosText}
-        </td>
-        <td style="padding:12px; text-align:right; font-weight:600;">${formatCurrency(inv.total_amount)}</td>
-        <td style="padding:12px; text-align:right; font-weight:600; color:#10b981;">${formatCurrency(totalPaid)}</td>
-        <td style="padding:12px; text-align:right; font-weight:700; color:#ef4444;">${formatCurrency(currentDebt)}</td>
-      </tr>
-    `;
-  }).join('');
+    // Bloque Encabezado Corporativo
+    doc.setFillColor(15, 23, 42); // slate-900
+    doc.rect(0, 0, 220, 35, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("SURTIHOGAR G&C - REPORTE CONTABLE", 15, 18);
+    
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Historial de Facturación y Movimientos de Proveedor", 15, 26);
+    
+    // Información del Tercero
+    doc.setTextColor(51, 65, 85);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("DATOS DEL PROVEEDOR", 15, 48);
+    
+    doc.setFont("helvetica", "normal");
+    doc.text(`Nombre: ${s.name}`, 15, 55);
+    doc.text(`Contacto: ${s.phone || 'No registrado'}`, 15, 61);
+    
+    // Datos de Emisión
+    doc.setFont("helvetica", "bold");
+    doc.text("INFORMACIÓN GENERAL", 120, 48);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generado: ${new Date().toLocaleString()}`, 120, 55);
+    doc.text(`Rango: ${startDate || 'Inicio'} al ${endDate || 'Hoy'}`, 120, 61);
 
-  const overallDebt = filteredInvoices.reduce((acc, inv) => {
-    const paid = (inv.payments || []).reduce((sum, p) => sum + p.amount, 0);
-    return acc + (inv.total_amount - paid);
-  }, 0);
-
-  printWindow.document.write(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Reporte de Proveedor - ${s.name}</title>
-      <style>
-        body { font-family: 'Inter', system-ui, sans-serif; color: #334155; padding: 30px; margin: 0; }
-        .header { border-bottom: 3px solid #0f172a; padding-bottom: 15px; margin-bottom: 25px; }
-        .header h1 { margin: 0; font-size: 22px; color: #0f172a; }
-        .header p { margin: 5px 0 0; font-size: 13px; color: #64748b; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #f1f5f9; }
-        .grid p { margin: 5px 0; font-size: 13px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { background: #0f172a; color: white; text-align: left; padding: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-        td { border-bottom: 1px solid #e2e8f0; }
-        .summary-box { margin-top: 30px; background: #fff5f5; border: 1px solid #feb2b2; padding: 15px; border-radius: 8px; text-align: right; }
-        .summary-box h2 { margin: 0; color: #c53030; font-size: 18px; }
-        @media print {
-          body { padding: 10px; }
-          .no-print { display: none; }
-        }
-      </style>
-    </head>
-    <body>
-      <div class="header">
-        <h1>SURTIHOGAR G&C - REPORTE CONTABLE</h1>
-        <p>Auditoría y Estado de Cuentas por Proveedor</p>
-      </div>
-      <div class="grid">
-        <div>
-          <p><strong>Proveedor:</strong> ${s.name}</p>
-          <p><strong>Teléfono:</strong> ${s.phone || 'Sin registrar'}</p>
-        </div>
-        <div style="text-align:right;">
-          <p><strong>Fecha Emisión:</strong> ${new Date().toLocaleString()}</p>
-          <p><strong>Periodo del Reporte:</strong> ${startDate || 'Histórico Completo'} al ${endDate || 'Hoy'}</p>
-        </div>
-      </div>
+    // Línea Separadora
+    doc.setDrawColor(226, 232, 240);
+    doc.line(15, 70, 195, 70);
+    
+    // Construcción de la Tabla
+    const head = [['Detalle Factura / Abono', 'Valor Compra', 'Valor Abonado', 'Saldo Deuda']];
+    const body = [];
+    let overallDebt = 0;
+    
+    filteredInvoices.forEach(inv => {
+      const paid = (inv.payments || []).reduce((sum, p) => sum + p.amount, 0);
+      const debt = inv.total_amount - paid;
+      overallDebt += debt;
       
-      <h3>Historial de Facturas y Movimientos</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>Detalle / Abonos</th>
-            <th style="text-align:right;">Gasto Total</th>
-            <th style="text-align:right;">Abonado</th>
-            <th style="text-align:right;">Saldo Deuda</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${tableRows || '<tr><td colspan="4" style="padding:30px; text-align:center; color:#94a3b8;">Sin registros en este rango de fechas.</td></tr>'}
-        </tbody>
-      </table>
+      // Fila de Factura
+      body.push([
+        `Factura: #${inv.invoice_number}\n(Fecha: ${inv.date})`,
+        formatCurrency(inv.total_amount),
+        formatCurrency(paid),
+        formatCurrency(debt)
+      ]);
+      
+      // Sub-filas con desglose de abonos
+      (inv.payments || []).forEach(p => {
+        body.push([
+          `   ↳ Abono registrado el ${p.date}`,
+          '',
+          formatCurrency(p.amount),
+          ''
+        ]);
+      });
+    });
+    
+    if (body.length === 0) {
+      body.push([{ content: 'Sin movimientos financieros registrados en este periodo.', colSpan: 4, styles: { halign: 'center', textColor: [100,116,139] } }]);
+    }
 
-      <div class="summary-box">
-        <h2>DEUDA TOTAL CONSOLIDADA: ${formatCurrency(overallDebt)}</h2>
-      </div>
+    doc.autoTable({
+      startY: 78,
+      head: head,
+      body: body,
+      theme: 'striped',
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 4, font: 'helvetica' },
+      columnStyles: {
+        0: { cellWidth: 70 },
+        1: { halign: 'right' },
+        2: { halign: 'right' },
+        3: { halign: 'right', fontStyle: 'bold' }
+      }
+    });
+    
+    // Cuadro Resumen de Deuda Total
+    const finalY = doc.lastAutoTable.finalY + 15;
+    
+    // Verificar desbordamiento de página para el cuadro de deuda
+    if (finalY > 270) {
+      doc.addPage();
+      doc.setFillColor(254, 242, 242);
+      doc.setDrawColor(248, 113, 113);
+      doc.rect(110, 15, 85, 15, 'FD');
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(153, 27, 27);
+      doc.setFontSize(11);
+      doc.text(`DEUDA NETO TOTAL: ${formatCurrency(overallDebt)}`, 115, 24);
+    } else {
+      doc.setFillColor(254, 242, 242);
+      doc.setDrawColor(248, 113, 113);
+      doc.rect(110, finalY - 8, 85, 15, 'FD');
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(153, 27, 27);
+      doc.setFontSize(11);
+      doc.text(`DEUDA NETO TOTAL: ${formatCurrency(overallDebt)}`, 115, finalY + 1);
+    }
+    
+    // Proceder a Guardar / Compartir
+    const rawBlob = doc.output('blob');
+    const safeName = `Reporte_${s.name.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+    const shareFile = new File([rawBlob], safeName, { type: 'application/pdf' });
+    
+    // Evaluar capacidad de compartir en Web/Capacitor nativo
+    if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+      await navigator.share({
+        files: [shareFile],
+        title: `Reporte Contable - ${s.name}`,
+        text: `Adjuntamos reporte contable con corte a la fecha.`
+      });
+      window.showToast("✅ Reporte compartido con éxito.", "success");
+    } else {
+      // Caída controlada: Descargar archivo binario
+      doc.save(safeName);
+      window.showToast("✅ PDF descargado en la carpeta de Descargas.", "success");
+    }
 
-      <script>
-        window.onload = function() {
-          setTimeout(() => { window.print(); window.close(); }, 500);
-        }
-      </script>
-    </body>
-    </html>
-  `);
-  printWindow.document.close();
+  } catch (err) {
+    console.error("Error al sintetizar reporte PDF:", err);
+    window.showToast("❌ Error inesperado al generar el documento.", "danger");
+  }
 };
 
 window.fetchSuppliers = async () => {
