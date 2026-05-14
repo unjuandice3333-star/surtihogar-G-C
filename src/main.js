@@ -3766,8 +3766,18 @@ window.generateAdminSalesReportPDF = async () => {
       });
     }
 
-    if (filteredSales.length === 0) {
-      return window.showToast("ℹ️ No se registraron ventas en este rango de fechas.", "warning");
+    // 💸 NUEVO: Extraer y filtrar gastos operativos en el mismo rango y local
+    let filteredExpenses = state.transactions.filter(t => {
+      if (t.type !== 'expense') return false;
+      const tTime = new Date(t.date || t.created_at).getTime();
+      const inRange = tTime >= startMs && tTime <= endMs;
+      if (!inRange) return false;
+      if (bizId !== 'all' && t.business_id !== bizId) return false;
+      return true;
+    });
+
+    if (filteredSales.length === 0 && filteredExpenses.length === 0) {
+      return window.showToast("ℹ️ No se registraron movimientos (ventas ni gastos) en este periodo.", "warning");
     }
 
     // Crear documento en formato apaisado (LANDSCAPE) para dar espacio a los detalles
@@ -3905,61 +3915,140 @@ window.generateAdminSalesReportPDF = async () => {
       }
     });
 
-    // 📊 RESUMEN FINANCIERO Y MARGEN DE UTILIDAD (PIE DE PÁGINA EXPANDIDO)
+    // 💸 RENDER DE TABLA SECUNDARIA: EGRESOS Y GASTOS OPERATIVOS (Si existen)
+    if (filteredExpenses.length > 0) {
+      let currentY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 72) + 15;
+      
+      // Validar salto de página si no cabe la cabecera de gastos
+      if (currentY > 175) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(185, 28, 28); // Rojo oscuro corporativo
+      doc.text("📄 DESGLOSE DE EGRESOS Y GASTOS OPERATIVOS REGISTRADOS", 15, currentY);
+      
+      const expenseHead = [['REF / FECHA', 'SEDE / LOCAL', 'RESPONSABLE', 'MOTIVO / CATEGORÍA / DETALLE', 'PAGO', 'MONTO GASTO']];
+      const expenseBody = filteredExpenses.map(t => {
+        const bizNameObj = state.businesses.find(b => b.id === t.business_id)?.name || 'General';
+        const userObj = state.employees?.find(e => e.id === t.user_id) || (state.user?.id === t.user_id ? state.user : null);
+        const userName = userObj?.name || 'Colaborador';
+        
+        // Resolver categoría del gasto y notas
+        const catName = state.categories.find(c => c.id === t.category_id)?.name || 'Gasto General';
+        const desc = t.description ? `(${t.description})` : (t.note ? `(${t.note})` : '');
+        const finalMotivo = `${catName} ${desc}`;
+
+        const dateObj = new Date(t.date || t.created_at);
+        const dateStr = `${dateObj.getDate().toString().padStart(2,'0')}/${(dateObj.getMonth()+1).toString().padStart(2,'0')} ${dateObj.getHours().toString().padStart(2,'0')}:${dateObj.getMinutes().toString().padStart(2,'0')}`;
+
+        return [
+          `#TRX-${(t.id || '').slice(0,6).toUpperCase()}\n${dateStr}`,
+          bizNameObj,
+          userName,
+          finalMotivo,
+          (t.payment_method || 'Efectivo').toUpperCase(),
+          formatCurrency(parseFloat(t.amount) || 0)
+        ];
+      });
+
+      autoTable(doc, {
+        startY: currentY + 4,
+        head: expenseHead,
+        body: expenseBody,
+        theme: 'grid',
+        headStyles: { fillColor: [185, 28, 28], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5, cellPadding: 4 },
+        styles: { fontSize: 8, cellPadding: 3.5, font: 'helvetica', overflow: 'linebreak' },
+        columnStyles: {
+          0: { cellWidth: 35, fontStyle: 'bold' },
+          1: { cellWidth: 35 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 120 },
+          4: { cellWidth: 25, halign: 'center' },
+          5: { halign: 'right', fontStyle: 'bold', cellWidth: 32, textColor: [185, 28, 28] }
+        }
+      });
+    }
+
+    // 📊 RESUMEN FINANCIERO Y BALANCES FINALES (PIE DE PÁGINA EXPANDIDO CON CONTROL DE GASTOS)
     const finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 100) + 15;
     
-    // Validar si el cuadro de totales ampliado cabe en la página actual
-    if (finalY > 155) {
+    // Validar salto de página para el gran contenedor de balances
+    if (finalY > 135) {
       doc.addPage();
       doc.setPage(doc.getNumberOfPages());
     }
 
-    const rectY = finalY > 155 ? 20 : finalY;
+    const rectY = finalY > 135 ? 20 : finalY;
 
-    // Cálculos de Rentabilidad
-    const netProfit = totalRevenue - totalCost;
-    const profitMarginPct = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100) : 0;
+    // Cálculos Avanzados de EBITDA, Flujo de Caja y Utilidad Total
+    const totalOpExpenses = filteredExpenses.reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
+    const cashBalance = totalRevenue - totalOpExpenses; // Lo que físicamente debería haber en cuentas y caja
+    const realProfit = totalRevenue - totalCost - totalOpExpenses; // EBITDA Patrimonial Neto Real
+    const profitMarginPct = totalRevenue > 0 ? ((realProfit / totalRevenue) * 100) : 0;
 
-    // Dibujar contenedor estilizado
-    doc.setFillColor(240, 253, 250); // Fondo turquesa suave
-    doc.setDrawColor(45, 212, 191); // Borde turquesa
-    doc.rect(170, rectY - 8, 112, 45, 'FD'); // Alto incrementado a 45 para meter los 5 indicadores
+    // Dibujar contenedor estilizado de Balance General
+    doc.setFillColor(248, 250, 252); // Gris neutro suave
+    doc.setDrawColor(203, 213, 225); // Borde pizarra
+    doc.rect(155, rectY - 8, 127, 60, 'FD'); // Cuadro amplio
     
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(13, 148, 136);
     doc.setFontSize(9);
     
-    doc.text(`PRODUCTOS VENDIDOS:`, 175, rectY);
+    // BLOQUE A: Balance Físico de Flujo de Caja
+    doc.setTextColor(30, 41, 59);
+    doc.text("💵 BALANCE DE FLUJO DE CAJA POS", 160, rectY);
+    
     doc.setFont("helvetica", "normal");
-    doc.text(`${totalUnits} unidades`, 235, rectY);
+    doc.setFontSize(8.5);
+    doc.text(`(+) Ingresos por Ventas:`, 160, rectY + 6);
+    doc.text(`${formatCurrency(totalRevenue)}`, 240, rectY + 6);
+
+    doc.setTextColor(185, 28, 28);
+    doc.text(`(-) Gastos Operativos:`, 160, rectY + 12);
+    doc.text(`(${formatCurrency(totalOpExpenses)})`, 240, rectY + 12);
+
+    doc.setDrawColor(226, 232, 240);
+    doc.line(160, rectY + 15, 277, rectY + 15);
 
     doc.setFont("helvetica", "bold");
-    doc.text(`INGRESOS TOTALES:`, 175, rectY + 8);
+    doc.setTextColor(30, 41, 59);
+    doc.text(`📊 DISPONIBLE TOTAL CAJA:`, 160, rectY + 19);
+    doc.text(`${formatCurrency(cashBalance)}`, 240, rectY + 19);
+
+    // Línea divisoria de bloques contables
+    doc.setDrawColor(148, 163, 184);
+    doc.line(160, rectY + 24, 277, rectY + 24);
+
+    // BLOQUE B: Estado de Resultados (EBITDA)
+    doc.setFontSize(9);
+    doc.setTextColor(13, 148, 136); // Turquesa de rentabilidad
+    doc.text("📈 ESTADO DE RESULTADOS (EBITDA)", 160, rectY + 30);
+
     doc.setFont("helvetica", "normal");
-    doc.text(`${formatCurrency(totalRevenue)}`, 235, rectY + 8);
+    doc.setFontSize(8.5);
+    doc.setTextColor(30, 41, 59);
+    doc.text(`(-) Costos de Mercancía:`, 160, rectY + 36);
+    doc.text(`(${formatCurrency(totalCost)})`, 240, rectY + 36);
 
-    doc.setFont("helvetica", "bold");
-    doc.text(`COSTOS TOTALES:`, 175, rectY + 16);
-    doc.setFont("helvetica", "normal");
-    doc.text(`${formatCurrency(totalCost)}`, 235, rectY + 16);
+    doc.setDrawColor(226, 232, 240);
+    doc.line(160, rectY + 39, 277, rectY + 39);
 
-    // Línea sutil de balance interno
-    doc.setDrawColor(153, 246, 228);
-    doc.line(175, rectY + 21, 277, rectY + 21);
-
-    // Resultados netos destacados
     doc.setFont("helvetica", "bold");
     doc.setTextColor(15, 23, 42);
     doc.setFontSize(10.5);
-    
-    doc.text(`UTILIDAD NETA:`, 175, rectY + 27);
-    doc.text(`${formatCurrency(netProfit)}`, 235, rectY + 27);
+    doc.text(`UTILIDAD NETA REAL:`, 160, rectY + 44);
+    doc.text(`${formatCurrency(realProfit)}`, 240, rectY + 44);
 
-    doc.setTextColor(13, 148, 136); // Volver a tono turquesa fuerte para el porcentaje
-    doc.text(`MARGEN BRUTO:`, 175, rectY + 33);
-    doc.text(`${profitMarginPct.toFixed(2)}%`, 235, rectY + 33);
+    doc.setTextColor(13, 148, 136); 
+    doc.setFontSize(10);
+    doc.text(`MARGEN REAL BRUTO:`, 160, rectY + 50);
+    doc.text(`${profitMarginPct.toFixed(2)}%`, 240, rectY + 50);
 
     // 🚀 BÚNKER DE DESPACHO INDESTRUCTIBLE (NATIVO -> COMPARTIR -> DESCARGA)
+
     const rawBlob = doc.output('blob');
     const cleanBizName = bizName.replace(/[^a-zA-Z0-9]/g, '_');
     const safeName = `Auditoria_Ventas_${cleanBizName}_${startVal}.pdf`;
