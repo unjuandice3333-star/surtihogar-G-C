@@ -1547,71 +1547,122 @@ const render = () => {
   }
 
   else if (state.view === 'shifts_admin') {
+    if (!state.rosterConfig) {
+      const now = new Date();
+      const startOfWeek = new Date(now);
+      startOfWeek.setDate(now.getDate() - (now.getDay() === 0 ? 6 : now.getDay() - 1));
+      state.rosterConfig = {
+        daysCount: 15, // Por defecto 15 días a un mes
+        startDate: startOfWeek.toISOString().split('T')[0]
+      };
+    }
+
+    const baseDate = new Date(state.rosterConfig.startDate + 'T00:00:00');
+    const rosterDates = Array.from({ length: state.rosterConfig.daysCount }, (_, i) => {
+      const d = new Date(baseDate);
+      d.setDate(baseDate.getDate() + i);
+      return d;
+    });
+
     html = `
       <header class="main-header">
         <div class="logo-container">
-          <div class="logo-icon"><i data-lucide="calendar-days"></i></div>
+          <div class="logo-icon" style="background:var(--primary); color:white;"><i data-lucide="calendar-days"></i></div>
           <div class="header-title">
-            <p class="role-tag" style="margin:0;">PLANIFICACIÓN</p>
+            <p class="role-tag" style="margin:0; background:rgba(59,130,246,0.1); color:var(--primary);">PLANIFICACIÓN</p>
             <h1>Gestión de Turnos</h1>
           </div>
         </div>
         <div class="header-actions">
-          <button onclick="window.openModal('shift')" class="btn-primary" style="padding:10px 20px; font-size:12px;">+ NUEVO TURNO</button>
+          <button onclick="window.openModal('shift')" class="btn-primary" style="padding:10px 20px; font-size:12px; display:flex; align-items:center; gap:6px;"><i data-lucide="plus-circle" style="width:14px;"></i> NUEVO TURNO</button>
           <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px; margin-left:10px;">VOLVER</button>
         </div>
       </header>
 
-      <div class="container" style="max-width:1000px;">
-        <div class="card" style="padding:0; overflow:hidden; overflow-x:auto;">
-          <div style="padding:20px; border-bottom:1px solid #f1f5f9;">
-            <h3 style="font-size:16px;">Calendario Semanal de Personal</h3>
+      <div class="container" style="max-width:1200px;">
+        <div class="card" style="padding:0; overflow:hidden;">
+          <!-- CONTROLES DE CONFIGURACIÓN DE PLANILLA MÓVIL / MÁS DE 15 DÍAS -->
+          <div style="padding:20px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:15px; background:#fafafa;">
+            <div>
+              <h3 style="font-size:16px; margin:0; font-weight:800; color:#1e293b; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="layout-grid" style="width:18px; color:var(--primary);"></i>
+                Planilla Dinámica de Personal
+              </h3>
+              <p style="font-size:11px; color:#94a3b8; margin:2px 0 0 0;">Periodo de ${state.rosterConfig.daysCount} días visible en pantalla</p>
+            </div>
+            
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+              <div style="display:flex; align-items:center; gap:6px;">
+                <label style="font-size:10px; font-weight:900; color:#64748b; text-transform:uppercase;">Vista Planilla:</label>
+                <select onchange="state.rosterConfig.daysCount = parseInt(this.value); window.render()" class="form-input" style="width:auto; height:36px; font-size:12px; font-weight:700; border-radius:10px; padding:0 10px; border-color:#cbd5e1;">
+                  <option value="7" ${state.rosterConfig.daysCount === 7 ? 'selected' : ''}>📋 Semanal (7d)</option>
+                  <option value="15" ${state.rosterConfig.daysCount === 15 ? 'selected' : ''}>📋 Quincenal (15d)</option>
+                  <option value="30" ${state.rosterConfig.daysCount === 30 ? 'selected' : ''}>📋 Mensual (30d)</option>
+                </select>
+              </div>
+              <div style="display:flex; align-items:center; gap:6px;">
+                <label style="font-size:10px; font-weight:900; color:#64748b; text-transform:uppercase;">A partir de:</label>
+                <input type="date" onchange="state.rosterConfig.startDate = this.value; window.render()" class="form-input" style="width:auto; height:36px; font-size:12px; font-weight:700; border-radius:10px; padding:0 10px; border-color:#cbd5e1;" value="${state.rosterConfig.startDate}">
+              </div>
+            </div>
           </div>
-          <table style="width:100%; border-collapse:collapse; font-size:11px; min-width:800px;">
-            <thead>
-              <tr style="background:#f8fafc;">
-                <th style="padding:15px; text-align:left; border-bottom:1px solid #f1f5f9; width:150px; color:var(--text-muted);">COLABORADOR</th>
-                ${['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'].map(d => `<th style="padding:15px; text-align:center; border-bottom:1px solid #f1f5f9; color:var(--text-muted);">${d}</th>`).join('')}
-              </tr>
-            </thead>
-            <tbody>
-              ${state.employees.map(emp => {
-                const empShifts = state.shifts.filter(s => s.user_id === emp.id);
-                const now = new Date();
-                const startOfWeek = new Date(now);
-                startOfWeek.setDate(now.getDate() - (now.getDay() === 0 ? 6 : now.getDay() - 1));
-                startOfWeek.setHours(0,0,0,0);
 
-                return `
-                  <tr style="border-bottom:1px solid #f1f5f9;">
-                    <td style="padding:15px; font-weight:700; background:#fcfcfc;">${emp.name}</td>
-                    ${[0,1,2,3,4,5,6].map(dayOffset => {
-                      const dayDate = new Date(startOfWeek);
-                      dayDate.setDate(startOfWeek.getDate() + dayOffset);
-                      const dayShift = empShifts.find(s => new Date(s.start_time).toDateString() === dayDate.toDateString());
+          <!-- TABLA DE PLANILLA MATRIX (Horizontal Scroll) -->
+          <div style="overflow-x:auto; background:#ffffff; max-height:500px; overflow-y:auto;">
+            <table style="width:100%; border-collapse:collapse; font-size:11px; min-width:1000px; table-layout:fixed;">
+              <thead>
+                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0; position:sticky; top:0; z-index:10;">
+                  <th style="padding:15px; text-align:left; width:180px; color:#64748b; background:#f8fafc; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; border-right:1px solid #e2e8f0;">COLABORADOR</th>
+                  ${rosterDates.map(d => {
+                    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                    return `<th style="padding:10px; text-align:center; width:110px; color:${isWeekend ? 'var(--danger)' : '#475569'}; font-weight:800; background:${isWeekend ? '#fff1f2' : '#f8fafc'}; border-right:1px solid #edf2f7;">
+                      <span style="font-size:9px; opacity:0.7; text-transform:uppercase; display:block;">${d.toLocaleDateString('es-ES', { weekday: 'short' })}</span>
+                      <span style="font-size:14px; font-weight:900; display:block; margin-top:2px;">${d.getDate()}</span>
+                      <span style="font-size:8px; opacity:0.6; text-transform:uppercase; display:block;">${d.toLocaleDateString('es-ES', { month: 'short' })}</span>
+                    </th>`;
+                  }).join('')}
+                </tr>
+              </thead>
+              <tbody>
+                ${state.employees.map(emp => {
+                  const empShifts = state.shifts.filter(s => s.user_id === emp.id);
 
-                      return `
-                        <td style="padding:10px; text-align:center; vertical-align:top; min-height:80px;">
-                          ${dayShift ? `
-                            <div style="background:linear-gradient(135deg, var(--primary) 0%, #0f172a 100%); color:white; padding:10px; border-radius:12px; font-size:10px; font-weight:600; box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-                              <div style="margin-bottom:4px;">${dayShift.businesses?.name || 'Local'}</div>
-                              <div style="font-size:9px; opacity:0.8; display:flex; align-items:center; justify-content:center; gap:4px;"><i data-lucide="clock" style="width:10px;"></i> ${new Date(dayShift.start_time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>
-                              <div style="margin-top:8px; display:flex; justify-content:center; gap:8px;">
-                                <span onclick="window.openModal('shift', '${dayShift.id}')" style="cursor:pointer; display:flex; align-items:center;"><i data-lucide="edit-2" style="width:12px;"></i></span>
-                                <span onclick="window.deleteShift('${dayShift.id}')" style="cursor:pointer; display:flex; align-items:center;"><i data-lucide="trash-2" style="width:12px;"></i></span>
+                  return `
+                    <tr style="border-bottom:1px solid #edf2f7; transition: background 0.1s;">
+                      <td style="padding:15px; font-weight:800; color:#1e293b; background:#fafbfc; border-right:1px solid #e2e8f0; position:sticky; left:0; z-index:2; box-shadow: 2px 0 5px rgba(0,0,0,0.02);">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                          <div style="width:26px; height:26px; border-radius:50%; background:var(--primary); color:white; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900;">${emp.name.charAt(0).toUpperCase()}</div>
+                          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${emp.name}</span>
+                        </div>
+                      </td>
+                      ${rosterDates.map(dayDate => {
+                        const dayShift = empShifts.find(s => new Date(s.start_time).toDateString() === dayDate.toDateString());
+                        const isWeekend = dayDate.getDay() === 0 || dayDate.getDay() === 6;
+                        const isToday = dayDate.toDateString() === new Date().toDateString();
+
+                        return `
+                          <td style="padding:12px; text-align:center; vertical-align:middle; min-height:90px; border-right:1px solid #edf2f7; background:${isToday ? '#eff6ff' : (isWeekend ? '#fffafb' : '#ffffff')};">
+                            ${dayShift ? `
+                              <div style="background:linear-gradient(135deg, var(--primary) 0%, #1e293b 100%); color:white; padding:8px; border-radius:10px; font-size:9px; font-weight:700; box-shadow:0 2px 6px rgba(0,0,0,0.1); position:relative; overflow:hidden;" title="Turno asignado en ${dayShift.businesses?.name || 'Sede'}">
+                                <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:2px; opacity:0.9; font-size:8px; font-weight:800; text-transform:uppercase;">📍 ${dayShift.businesses?.name || 'Local'}</div>
+                                <div style="font-size:10px; display:flex; align-items:center; justify-content:center; gap:2px; font-weight:800;"><i data-lucide="clock" style="width:10px;"></i> ${new Date(dayShift.start_time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12: false})}</div>
+                                <div style="margin-top:6px; display:flex; justify-content:center; gap:12px; background:rgba(255,255,255,0.15); padding:3px 0; border-radius:6px;">
+                                  <span onclick="window.openModal('shift', '${dayShift.id}')" style="cursor:pointer; display:flex; align-items:center; color:white;" title="Editar"><i data-lucide="edit-2" style="width:11px; height:11px;"></i></span>
+                                  <span onclick="window.deleteShift('${dayShift.id}')" style="cursor:pointer; display:flex; align-items:center; color:#fca5a5;" title="Borrar"><i data-lucide="trash-2" style="width:11px; height:11px;"></i></span>
+                                </div>
                               </div>
-                            </div>
-                          ` : `
-                            <button onclick="window.openModal('shift', null, '${emp.id}', '${dayDate.toISOString()}')" style="width:36px; height:36px; background:#f1f5f9; border:none; color:var(--text-muted); cursor:pointer; border-radius:10px; font-size:16px;">+</button>
-                          `}
-                        </td>
-                      `;
-                    }).join('')}
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
+                            ` : `
+                              <button onclick="window.openModal('shift', null, '${emp.id}', '${dayDate.toISOString()}')" style="width:28px; height:28px; background:#f1f5f9; border:1px dashed #cbd5e1; color:#94a3b8; cursor:pointer; border-radius:8px; font-size:14px; font-weight:800; transition:all 0.2s; display:inline-flex; align-items:center; justify-content:center;" onmouseover="this.style.background='var(--primary)'; this.style.color='white';" onmouseout="this.style.background='#f1f5f9'; this.style.color='#94a3b8';">+</button>
+                            `}
+                          </td>
+                        `;
+                      }).join('')}
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div class="card" style="margin-top:20px; padding:0; overflow:hidden;">
