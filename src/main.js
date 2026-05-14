@@ -2667,7 +2667,9 @@ const render = () => {
             </button>
           ` : ''}
           <button onclick="window.openPos()" class="btn-primary" style="padding:15px; background:var(--secondary);">+ VENTA (POS)</button>
-          <button onclick="window.openModal('expense')" class="btn-primary" style="padding:15px;">+ GASTO</button>
+          ${(state.user?.role === 'admin' || (state.businesses.find(b => b.id === state.currentBusinessId)?.name || '').toLowerCase().includes('surtihogar')) ? `
+            <button onclick="window.openModal('expense')" class="btn-primary" style="padding:15px;">+ GASTO</button>
+          ` : ''}
           <button onclick="window.showShiftReport()" class="btn-primary" style="padding:15px; background:#475569;">📄 REPORTE TURNO</button>
           ${(state.user?.role === 'admin' || state.user?.can_manage_inventory) ? `
             <button onclick="state.activeModal='new_product';render()" class="btn-primary" style="padding:15px; background:var(--primary);">+ NUEVO PROD</button>
