@@ -1608,11 +1608,11 @@ const render = () => {
           </div>
 
           <!-- TABLA DE PLANILLA MATRIX (Horizontal Scroll) -->
-          <div style="overflow-x:auto; background:#ffffff; max-height:500px; overflow-y:auto;">
-            <table style="width:100%; border-collapse:collapse; font-size:11px; min-width:1000px; table-layout:fixed;">
+          <div style="overflow-x:auto; background:#ffffff; max-height:550px; overflow-y:auto; -webkit-overflow-scrolling: touch; position: relative; border-radius: 0 0 16px 16px;">
+            <table style="width: calc(180px + (${state.rosterConfig.daysCount} * 110px)); border-collapse:collapse; font-size:11px; table-layout:fixed;">
               <thead>
                 <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0; position:sticky; top:0; z-index:10;">
-                  <th style="padding:15px; text-align:left; width:180px; color:#64748b; background:#f8fafc; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; border-right:1px solid #e2e8f0;">COLABORADOR</th>
+                  <th style="padding:15px; text-align:left; width:180px; color:#64748b; background:#f8fafc; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; border-right:1px solid #e2e8f0; position:sticky; left:0; z-index:11; box-shadow: 2px 0 5px rgba(0,0,0,0.05);">COLABORADOR</th>
                   ${rosterDates.map(d => {
                     const isWeekend = d.getDay() === 0 || d.getDay() === 6;
                     return `<th style="padding:10px; text-align:center; width:110px; color:${isWeekend ? 'var(--danger)' : '#475569'}; font-weight:800; background:${isWeekend ? '#fff1f2' : '#f8fafc'}; border-right:1px solid #edf2f7;">
