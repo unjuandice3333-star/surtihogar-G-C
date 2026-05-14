@@ -798,6 +798,16 @@ const render = () => {
     const totalIncome = state.transactions.filter(t => t.type === 'income').reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
     const totalExpense = state.transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
 
+    if (!state.payrollFilters) {
+      const now = new Date();
+      const first = new Date(now.getFullYear(), now.getMonth(), 1);
+      state.payrollFilters = {
+        employeeId: 'all',
+        startDate: first.toISOString().split('T')[0],
+        endDate: now.toISOString().split('T')[0]
+      };
+    }
+
     html = `
       <header class="main-header">
         <div class="logo-container">
@@ -981,69 +991,101 @@ const render = () => {
 
         <!-- CALCULADORA DE NÓMINA PREMIUM -->
         <div class="card" style="margin-top:30px; padding:30px; border:none; box-shadow: 0 10px 30px rgba(0,0,0,0.05); background: #ffffff;">
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px; flex-wrap:wrap; gap:15px;">
             <div>
               <h3 style="font-size:20px; font-weight:800; color:#1e293b; display:flex; align-items:center; gap:12px;">
                 <span style="background:var(--secondary); color:white; padding:8px; border-radius:12px;"><i data-lucide="dollar-sign"></i></span>
                 Liquidación de Nómina
               </h3>
-              <p style="font-size:12px; color:#64748b; margin-top:5px; font-weight:500;">Mes actual: ${new Date().toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }).toUpperCase()}</p>
+              <p style="font-size:12px; color:#64748b; margin-top:5px; font-weight:500;">Filtros aplicados: Del <strong>${new Date(state.payrollFilters.startDate+'T00:00').toLocaleDateString('es-ES', {day:'numeric', month:'short'})}</strong> al <strong>${new Date(state.payrollFilters.endDate+'T00:00').toLocaleDateString('es-ES', {day:'numeric', month:'short', year:'numeric'})}</strong></p>
             </div>
-            <button onclick="window.calculatePayroll()" class="btn-primary" style="background:var(--secondary); padding:12px 25px; border-radius:12px; box-shadow: 0 4px 12px rgba(239,68,68,0.2); display:flex; align-items:center; gap:8px;">
+          </div>
+
+          <!-- PANEL DE FILTROS SEMI-AUTOMÁTICOS (Calendario y Empleado) -->
+          <div style="display:flex; gap:15px; margin-bottom:25px; background:#f8fafc; padding:20px; border-radius:16px; align-items:flex-end; flex-wrap:wrap; border:1px solid #e2e8f0;">
+            <div style="flex:1; min-width:220px;">
+              <label style="display:block; font-size:11px; font-weight:800; color:#64748b; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px;">👤 Seleccionar Empleado</label>
+              <select id="payroll-emp" class="form-input" style="width:100%; font-size:13px; font-weight:700; border-radius:10px;">
+                <option value="all" ${state.payrollFilters.employeeId === 'all' ? 'selected' : ''}>👥 TODOS LOS COLABORADORES</option>
+                ${state.employees.map(emp => `<option value="${emp.id}" ${state.payrollFilters.employeeId === emp.id ? 'selected' : ''}>👤 ${emp.name}</option>`).join('')}
+              </select>
+            </div>
+            <div style="flex:1; min-width:150px;">
+              <label style="display:block; font-size:11px; font-weight:800; color:#64748b; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px;">📅 Fecha Desde (Día X)</label>
+              <input type="date" id="payroll-start" class="form-input" style="width:100%; font-size:13px; font-weight:700; border-radius:10px;" value="${state.payrollFilters.startDate}">
+            </div>
+            <div style="flex:1; min-width:150px;">
+              <label style="display:block; font-size:11px; font-weight:800; color:#64748b; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px;">📅 Fecha Hasta (Día Y)</label>
+              <input type="date" id="payroll-end" class="form-input" style="width:100%; font-size:13px; font-weight:700; border-radius:10px;" value="${state.payrollFilters.endDate}">
+            </div>
+            <button onclick="window.executePayrollCalculation()" class="btn-primary" style="background:var(--secondary); padding:12px 25px; border-radius:12px; font-weight:800; box-shadow: 0 4px 12px rgba(239,68,68,0.2); display:flex; align-items:center; gap:8px; height:45px;">
               <i data-lucide="refresh-cw" style="width:16px;"></i> CALCULAR NÓMINA
             </button>
           </div>
 
           <div style="overflow-x:auto;">
-            <table style="width:100%; border-collapse:separate; border-spacing: 0 10px;">
+            <table style="width:100%; border-collapse:separate; border-spacing: 0 10px; font-size:13px;">
               <thead>
-                <tr style="text-align:left; color:#94a3b8; font-size:11px; text-transform:uppercase; letter-spacing:1px;">
+                <tr style="text-align:left; color:#94a3b8; font-size:10px; text-transform:uppercase; letter-spacing:1px;">
                   <th style="padding:15px;">Colaborador</th>
-                  <th style="padding:15px;">Tarifa / Hora</th>
-                  <th style="padding:15px;">Turnos / Tiempo</th>
-                  <th style="padding:15px; text-align:right;">Monto a Liquidar</th>
+                  <th style="padding:15px;">Tarifa</th>
+                  <th style="padding:15px; text-align:center; background:rgba(59,130,246,0.03); border-radius:10px 0 0 10px;">Planilla Fija</th>
+                  <th style="padding:15px; text-align:center; background:rgba(16,185,129,0.03);">Marcación Real (GPS)</th>
+                  <th style="padding:15px; text-align:center; background:rgba(245,158,11,0.03); border-radius:0 10px 10px 0;">Desfase / Variación</th>
+                  <th style="padding:15px; text-align:right;">Liquidación</th>
                 </tr>
               </thead>
               <tbody>
                 ${!state.payrollData ? `
                   <tr>
-                    <td colspan="4" style="text-align:center; padding:60px;">
+                    <td colspan="6" style="text-align:center; padding:60px; background:#f8fafc; border-radius:16px;">
                       <div style="font-size:40px; margin-bottom:15px; color:#94a3b8;"><i data-lucide="bar-chart-3" style="width:48px; height:48px;"></i></div>
-                      <p style="color:#94a3b8; font-size:14px; font-weight:500;">Haz clic en el botón superior para procesar los datos en vivo</p>
+                      <p style="color:#64748b; font-size:14px; font-weight:600;">Define el rango de fechas arriba y haz clic en Calcular Nómina</p>
                     </td>
                   </tr>
-                ` : state.employees.map(emp => {
-                  const data = state.payrollData[emp.id] || { hours: 0, gpsHours: 0, pay: 0, shiftsCount: 0 };
-                  const diff = Math.abs(data.hours - data.gpsHours);
+                ` : Object.entries(state.payrollData)
+                    .filter(([empId]) => state.payrollFilters.employeeId === 'all' || state.payrollFilters.employeeId === empId)
+                    .map(([empId, data]) => {
+                  const emp = state.employees.find(e => e.id === empId) || { name: 'Empleado Desconocido', hourly_rate: 0 };
+                  const offset = data.gpsHours - data.hours; // Real GPS menos Planilla
                   
+                  let offsetBadge = '';
+                  if (Math.abs(offset) < 0.05) {
+                    offsetBadge = `<span style="display:inline-flex; padding:4px 10px; background:#ecfdf5; color:#10b981; border:1px solid #d1fae5; border-radius:20px; font-weight:800; font-size:11px; gap:4px;"><i data-lucide="check-circle" style="width:12px;"></i> Coincide</span>`;
+                  } else if (offset > 0) {
+                    offsetBadge = `<span style="display:inline-flex; padding:4px 10px; background:#eff6ff; color:#2563eb; border:1px solid #dbeafe; border-radius:20px; font-weight:800; font-size:11px; gap:4px;" title="El empleado trabajó más tiempo que el asignado en planilla"><i data-lucide="trending-up" style="width:12px;"></i> +${offset.toFixed(2)}h Extra</span>`;
+                  } else {
+                    offsetBadge = `<span style="display:inline-flex; padding:4px 10px; background:#fef2f2; color:#ef4444; border:1px solid #fee2e2; border-radius:20px; font-weight:800; font-size:11px; gap:4px;" title="El empleado trabajó menos tiempo del asignado"><i data-lucide="alert-triangle" style="width:12px;"></i> -${Math.abs(offset).toFixed(2)}h Faltante</span>`;
+                  }
+
                   return `
-                    <tr style="background:#f8fafc; transition:transform 0.2s;">
-                      <td style="padding:20px; border-radius:16px 0 0 16px; font-weight:800; color:#1e293b; font-size:15px;">${emp.name}</td>
-                      <td style="padding:20px; color:#475569; font-weight:600;">
+                    <tr style="background:#f8fafc; transition:all 0.2s;">
+                      <td style="padding:15px; border-radius:12px 0 0 12px; font-weight:800; color:#1e293b;">
                         <div style="display:flex; align-items:center; gap:8px;">
+                          <div style="width:32px; height:32px; border-radius:50%; background:#e2e8f0; display:flex; align-items:center; justify-content:center; font-size:12px; color:#475569; font-weight:800;">${emp.name.charAt(0).toUpperCase()}</div>
+                          <div>
+                            <p style="margin:0; font-size:14px;">${emp.name}</p>
+                            <p style="margin:2px 0 0 0; font-size:10px; color:#94a3b8;">${data.shiftsCount} turnos registrados</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td style="padding:15px; color:#475569; font-weight:600;">
+                        <div style="display:flex; align-items:center; gap:4px;">
                           ${formatCurrency(emp.hourly_rate || 0)}
-                          <button onclick="window.editHourlyRate('${emp.id}', '${emp.name.replace(/'/g, "\\'")}')" style="background:rgba(59,130,246,0.1); border:none; cursor:pointer; color:var(--primary); display:flex; align-items:center; justify-content:center; width:32px; height:32px; border-radius:8px; transition:all 0.2s;" title="Editar Tarifa">
-                            <i data-lucide="edit-2" style="width:16px; pointer-events:none;"></i>
-                          </button>
+                          <button onclick="window.editHourlyRate('${emp.id}', '${emp.name.replace(/'/g, "\\'")}')" style="background:none; border:none; cursor:pointer; color:var(--primary); width:24px; height:24px; display:flex; align-items:center; justify-content:center;" title="Modificar Tarifa"><i data-lucide="edit-3" style="width:14px;"></i></button>
                         </div>
                       </td>
-                      <td style="padding:20px;">
-                        <div style="display:flex; flex-direction:column; gap:4px;">
-                          <span style="font-weight:800; color:var(--primary); font-size:14px;">${data.hours.toFixed(2)}h (Turnos)</span>
-                          ${diff > 1 && data.hours > 0 ? `
-                            <span style="font-size:10px; color:var(--danger); font-weight:800; background:rgba(239,68,68,0.1); padding:4px 8px; border-radius:6px; align-self:flex-start; border:1px solid rgba(239,68,68,0.2);" title="El empleado tiene ${data.hours.toFixed(1)}h programadas pero el GPS sumó ${data.gpsHours.toFixed(1)}h">
-                              ⚠️ GPS: ${data.gpsHours.toFixed(1)}h
-                            </span>
-                          ` : `
-                            <span style="font-size:10px; color:var(--success); font-weight:800; background:rgba(16,185,129,0.1); padding:4px 8px; border-radius:6px; align-self:flex-start; border:1px solid rgba(16,185,129,0.2);">
-                              ✅ GPS Coincide (${data.gpsHours.toFixed(1)}h)
-                            </span>
-                          `}
-                          <span style="font-size:10px; color:#94a3b8; font-weight:700; margin-top:2px;">${data.shiftsCount} turnos finalizados</span>
-                        </div>
+                      <td style="padding:15px; text-align:center; font-weight:800; color:#1d4ed8; background:rgba(59,130,246,0.02);">
+                        ${data.hours.toFixed(2)} hrs
                       </td>
-                      <td style="padding:20px; border-radius:0 16px 16px 0; text-align:right;">
-                        <span style="font-size:18px; font-weight:900; color:var(--success);">${formatCurrency(data.pay)}</span>
+                      <td style="padding:15px; text-align:center; font-weight:800; color:#047857; background:rgba(16,185,129,0.02);">
+                        ${data.gpsHours.toFixed(2)} hrs
+                      </td>
+                      <td style="padding:15px; text-align:center; background:rgba(245,158,11,0.02);">
+                        ${offsetBadge}
+                      </td>
+                      <td style="padding:15px; border-radius:0 12px 12px 0; text-align:right;">
+                        <span style="font-size:16px; font-weight:900; color:var(--success);">${formatCurrency(data.pay)}</span>
                       </td>
                     </tr>
                   `;
@@ -3895,8 +3937,24 @@ window.render = () => {
     `;
   }
 };
+window.executePayrollCalculation = async () => {
+  const empSelect = document.getElementById('payroll-emp');
+  const startInput = document.getElementById('payroll-start');
+  const endInput = document.getElementById('payroll-end');
+
+  if (!empSelect || !startInput || !endInput) return;
+
+  state.payrollFilters = {
+    employeeId: empSelect.value,
+    startDate: startInput.value,
+    endDate: endInput.value
+  };
+
+  await window.calculatePayroll();
+};
+
 window.calculatePayroll = async () => {
-  const btn = document.querySelector('button[onclick="window.calculatePayroll()"]');
+  const btn = document.querySelector('button[onclick="window.executePayrollCalculation()"]');
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = '<i data-lucide="loader-2" class="spin" style="width:16px;"></i> CALCULANDO...';
@@ -3904,27 +3962,36 @@ window.calculatePayroll = async () => {
   }
 
   try {
-    const results = {};
-    const now = new Date();
-    const currentMonth = now.getMonth();
-    const currentYear = now.getFullYear();
+    if (!state.payrollFilters) {
+      const now = new Date();
+      const first = new Date(now.getFullYear(), now.getMonth(), 1);
+      state.payrollFilters = {
+        employeeId: 'all',
+        startDate: first.toISOString().split('T')[0],
+        endDate: now.toISOString().split('T')[0]
+      };
+    }
 
-    const firstDay = new Date(currentYear, currentMonth, 1).toISOString();
+    const results = {};
+    const startLimit = new Date(state.payrollFilters.startDate + 'T00:00:00').toISOString();
+    const endLimit = new Date(state.payrollFilters.endDate + 'T23:59:59').toISOString();
+
+    // 1. Extraer bitácora de GPS dentro del rango temporal del calendario
     const { data: gpsLogs } = await supabase
       .from('system_logs')
       .select('*')
       .eq('type', 'GEOLOCATION_TRACK')
-      .gte('timestamp', firstDay)
+      .gte('timestamp', startLimit)
+      .lte('timestamp', endLimit)
       .order('timestamp', { ascending: true });
 
+    // Procesar para cada empleado
     state.employees.forEach(emp => {
+      // A. PLANILLA FIJA (Horas programadas en turnos de la base de datos)
       const empShifts = state.shifts.filter(s => {
-        const start = new Date(s.start_time);
-        const end = new Date(s.end_time);
-        return s.user_id === emp.id && 
-               start.getMonth() === currentMonth && 
-               start.getFullYear() === currentYear &&
-               end < now; 
+        if (s.user_id !== emp.id || !s.end_time) return false;
+        const shiftStart = new Date(s.start_time);
+        return shiftStart >= new Date(startLimit) && shiftStart <= new Date(endLimit);
       });
 
       const totalHours = empShifts.reduce((acc, s) => {
@@ -3933,37 +4000,62 @@ window.calculatePayroll = async () => {
         return acc + (end - start) / (1000 * 60 * 60);
       }, 0);
 
+      // B. MARCACIÓN REAL (Horas reales basadas en el primer GPS Entrada y último GPS Salida del día)
       let gpsHours = 0;
       if (gpsLogs) {
         const empGps = gpsLogs.filter(l => l.user_id === emp.id);
-        let lastArrival = null;
-        for (const log of empGps) {
+        const dailyPairs = {};
+
+        empGps.forEach(log => {
+          let msgText = '';
           try {
-            const isArrival = log.message.includes('LLEGADA');
-            if (isArrival) {
-              lastArrival = new Date(log.timestamp);
-            } else if (lastArrival) {
-              const departure = new Date(log.timestamp);
-              if (departure.getDate() === lastArrival.getDate()) {
-                gpsHours += (departure - lastArrival) / (1000 * 60 * 60);
-              }
-              lastArrival = null;
+            msgText = JSON.parse(log.message).text || '';
+          } catch(e) { msgText = log.message || ''; }
+
+          const isArr = msgText.includes('LLEGADA');
+          const logTime = new Date(log.timestamp);
+
+          // Tratamiento de horario nocturno idéntico al dashboard de asistencia
+          let groupDate = new Date(log.timestamp);
+          if (!isArr && logTime.getHours() < 6) {
+            groupDate = new Date(logTime.getTime() - 12 * 60 * 60 * 1000);
+          }
+
+          const key = `${groupDate.getFullYear()}-${String(groupDate.getMonth()+1).padStart(2,'0')}-${String(groupDate.getDate()).padStart(2,'0')}`;
+          if (!dailyPairs[key]) dailyPairs[key] = { arrival: null, departure: null };
+
+          if (isArr) {
+            if (!dailyPairs[key].arrival || logTime < dailyPairs[key].arrival) {
+              dailyPairs[key].arrival = logTime;
             }
-          } catch(e) {}
-        }
+          } else {
+            if (!dailyPairs[key].departure || logTime > dailyPairs[key].departure) {
+              dailyPairs[key].departure = logTime;
+            }
+          }
+        });
+
+        // Acumular tiempo total por cada par diario consolidado
+        Object.values(dailyPairs).forEach(pair => {
+          if (pair.arrival && pair.departure && pair.departure > pair.arrival) {
+            gpsHours += (pair.departure - pair.arrival) / (1000 * 60 * 60);
+          }
+        });
       }
 
+      // C. Guardar resultado cruzado del desfase
       results[emp.id] = {
         hours: totalHours,
         gpsHours: gpsHours,
-        pay: totalHours * (parseFloat(emp.hourly_rate) || 0),
+        pay: gpsHours * (parseFloat(emp.hourly_rate) || 0), // Liquidamos sobre lo trabajado real!
         shiftsCount: empShifts.length
       };
     });
 
     state.payrollData = results;
-    window.showToast('✅ Liquidación auditada con éxito', 'success');
+    window.showToast('📊 Auditoría cruzada de nómina finalizada con éxito', 'success');
   } catch(e) {
+    console.error("Payroll calculation error:", e);
     window.showToast('Error calculando nómina: ' + e.message, 'danger');
   } finally {
     render();
