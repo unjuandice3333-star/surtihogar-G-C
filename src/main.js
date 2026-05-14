@@ -4,6 +4,9 @@ import { SupplierService } from './services/SupplierService'
 import { DatabaseService } from './services/DatabaseService'
 import { byodService } from './services/ByodComplianceService'
 import { Geolocation } from '@capacitor/geolocation'
+import { Capacitor } from '@capacitor/core'
+import { Filesystem, Directory } from '@capacitor/filesystem'
+import { Share } from '@capacitor/share'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
@@ -3600,49 +3603,84 @@ window.generateSupplierPdf = async () => {
     const safeName = `Reporte_${s.name.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     const shareFile = new File([rawBlob], safeName, { type: 'application/pdf' });
     
-    // SECUENCIACIÓN BLINDADA DE DESPACHO (Compartir -> Descarga Local -> Blob URL)
+    // SECUENCIACIÓN INDESTRUCTIBLE DE DESPACHO (Nativo -> Compartir -> Local)
     let isCompleted = false;
 
-    // 1. Intentar compartir nativamente (Android/Capacitor)
-    if (navigator.share && navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+    // === MODO NATIVO COMPLETO (CELULAR / EMULADOR) ===
+    if (Capacitor.isNativePlatform()) {
       try {
-        await navigator.share({
-          files: [shareFile],
-          title: `Reporte Contable - ${s.name}`,
-          text: `Adjuntamos reporte contable con corte a la fecha.`
+        window.showToast("⚙️ Procesando archivo nativo...", "info");
+        const base64 = doc.output('datauristring').split(',')[1];
+        
+        // 1. Escribir físicamente el archivo en la carpeta pública "Documentos" del celular
+        const writeResult = await Filesystem.writeFile({
+          path: safeName,
+          data: base64,
+          directory: Directory.Documents,
+          recursive: true
         });
+        
+        window.showToast(`📁 Guardado en Documentos (${safeName})`, "success");
+        
+        // 2. Lanzar la hoja de compartir nativa del celular con el enlace al archivo local
+        await Share.share({
+          title: `Reporte Contable - ${s.name}`,
+          text: `Comparto el reporte contable de ${s.name}.`,
+          url: writeResult.uri
+        });
+        
         isCompleted = true;
-        window.showToast("✅ Reporte enviado con éxito.", "success");
-      } catch (shareErr) {
-        console.warn("El menú de compartir falló o fue cancelado, procediendo a descarga local:", shareErr);
+      } catch (nativeErr) {
+        console.error("Fallo en almacenamiento/compartir nativo:", nativeErr);
+        window.showToast("⚠️ Error al acceder al disco nativo. Intentando alternativas...", "warning");
       }
     }
 
-    // 2. Si no se compartió, intentar guardar archivo físicamente (doc.save)
+    // === MODO WEB STANDBY (NAVEGADOR DE COMPUTADORA O CAÍDA DE SEGURIDAD) ===
     if (!isCompleted) {
-      try {
-        doc.save(safeName);
-        isCompleted = true;
-        window.showToast("✅ PDF guardado en tu carpeta de Descargas.", "success");
-      } catch (saveErr) {
-        console.error("Error fatal en doc.save():", saveErr);
-      }
-    }
+      const shareFile = new File([rawBlob], safeName, { type: 'application/pdf' });
 
-    // 3. Fallback Extremo (Si todo lo anterior falla en WebViews restringidas)
-    if (!isCompleted) {
-      try {
-        const blobUrl = URL.createObjectURL(rawBlob);
-        const tempLink = document.createElement('a');
-        tempLink.href = blobUrl;
-        tempLink.download = safeName;
-        document.body.appendChild(tempLink);
-        tempLink.click();
-        document.body.removeChild(tempLink);
-        window.showToast("✅ Descarga forzada iniciada.", "success");
-      } catch (fallbackErr) {
-        console.error("Error en fallback extremo de descarga:", fallbackErr);
-        window.showToast("❌ El dispositivo bloqueó la descarga. Revisa permisos.", "danger");
+      // A. Intentar Web Share API (Navegadores de escritorio soportados)
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+        try {
+          await navigator.share({
+            files: [shareFile],
+            title: `Reporte Contable - ${s.name}`,
+            text: `Adjuntamos reporte contable con corte a la fecha.`
+          });
+          isCompleted = true;
+          window.showToast("✅ Reporte compartido con éxito.", "success");
+        } catch (shareErr) {
+          console.warn("El menú web falló, procediendo a descarga:", shareErr);
+        }
+      }
+
+      // B. Guardado físico vía navegador (Vite/Chrome)
+      if (!isCompleted) {
+        try {
+          doc.save(safeName);
+          isCompleted = true;
+          window.showToast("✅ PDF descargado con éxito.", "success");
+        } catch (saveErr) {
+          console.error("Error en doc.save() web:", saveErr);
+        }
+      }
+
+      // C. Fallback Extremo Web
+      if (!isCompleted) {
+        try {
+          const blobUrl = URL.createObjectURL(rawBlob);
+          const tempLink = document.createElement('a');
+          tempLink.href = blobUrl;
+          tempLink.download = safeName;
+          document.body.appendChild(tempLink);
+          tempLink.click();
+          document.body.removeChild(tempLink);
+          window.showToast("✅ Descarga forzada completada.", "success");
+        } catch (fallbackErr) {
+          console.error("Error en descarga forzada:", fallbackErr);
+          window.showToast("❌ Dispositivo bloqueó la descarga.", "danger");
+        }
       }
     }
 
