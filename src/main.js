@@ -747,7 +747,8 @@ const render = () => {
     const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
     const activeBiz = state.businesses.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
-    const isSurtihogar = activeBiz && activeBiz.name.toLowerCase().includes('surtihogar');
+    const clusterKeywords = ['electro', 'mueble', 'ropa', 'pañalera', 'surtihogar'];
+    const isSurtihogar = activeBiz && clusterKeywords.some(kw => activeBiz.name.toLowerCase().includes(kw));
 
     html = `
       <header class="main-header">
