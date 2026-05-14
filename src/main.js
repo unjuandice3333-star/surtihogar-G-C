@@ -1725,6 +1725,10 @@ const render = () => {
                   <p style="font-size:12px; color:var(--text-muted); margin-top:5px;">${state.shifts.filter(s => s.user_id === e.id).length} turnos esta semana</p>
                 </div>
                 <div style="display:flex; align-items:center; gap:15px;">
+                  <label style="display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer;" title="Permite a este empleado registrar GASTOS en caja">
+                    <span style="font-size:9px; font-weight:800; color:${e.is_cashier ? 'var(--primary)' : 'var(--text-muted)'};">CAJERO</span>
+                    <input type="checkbox" onchange="window.toggleCashierPermission('${e.id}', ${e.is_cashier})" ${e.is_cashier ? 'checked' : ''}>
+                  </label>
                   <label style="display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer;">
                     <span style="font-size:9px; font-weight:800; color:${e.can_manage_inventory ? 'var(--success)' : 'var(--text-muted)'};">INVENTARIO</span>
                     <input type="checkbox" onchange="window.toggleInventoryPermission('${e.id}', ${e.can_manage_inventory})" ${e.can_manage_inventory ? 'checked' : ''}>
@@ -2667,7 +2671,7 @@ const render = () => {
             </button>
           ` : ''}
           <button onclick="window.openPos()" class="btn-primary" style="padding:15px; background:var(--secondary);">+ VENTA (POS)</button>
-          ${(state.user?.role === 'admin' || (state.businesses.find(b => b.id === state.currentBusinessId)?.name || '').toLowerCase().includes('surtihogar')) ? `
+          ${(state.user?.role === 'admin' || state.user?.is_cashier) ? `
             <button onclick="window.openModal('expense')" class="btn-primary" style="padding:15px;">+ GASTO</button>
           ` : ''}
           <button onclick="window.showShiftReport()" class="btn-primary" style="padding:15px; background:#475569;">📄 REPORTE TURNO</button>
@@ -4739,6 +4743,23 @@ window.updateUserBusiness = async (userId, businessId) => {
   } catch (err) {
     console.error(err);
     window.showToast('âŒ Error al asignar negocio: ' + err.message, 'danger');
+  }
+};
+
+window.toggleCashierPermission = async (userId, currentStatus) => {
+  try {
+    const { error } = await supabase.from('users')
+      .update({ is_cashier: !currentStatus })
+      .eq('id', userId);
+    
+    if (error) throw error;
+    
+    window.showToast('✅ Permiso de cajero actualizado', 'success');
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast('❌ Error al actualizar permiso: ' + err.message, 'danger');
   }
 };
 
