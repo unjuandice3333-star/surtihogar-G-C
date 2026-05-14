@@ -101,7 +101,7 @@ window.fetchData = async () => {
       state.suppliers = loadedSuppliers || [];
     } else {
       const [shRes, attRes] = await Promise.all([
-        supabase.from('shifts').select('*').eq('user_id', session.user.id),
+        supabase.from('shifts').select('*, businesses(lat, lng, geofence_radius_meters, name)').eq('user_id', session.user.id),
         supabase.from('system_logs').select('message').eq('user_id', session.user.id).eq('type', 'GEOLOCATION_TRACK').order('timestamp', { ascending: false }).limit(1)
       ]);
       state.shifts = shRes.data || [];
@@ -116,9 +116,17 @@ window.fetchData = async () => {
       } catch(e) {}
       state.hasActiveAttendance = hasGeoActive;
       
-      // Activar/Desactivar motor de telemetría silenciosa BYOD
+      // Calcular turno activo inmediato para alimentar el servicio BYOD local
+      const nowCheck = new Date();
+      const activeShiftLocal = (state.shifts || []).find(s => {
+        const start = new Date(s.start_time);
+        const end = new Date(s.end_time);
+        return nowCheck >= new Date(start.getTime() - 60000) && nowCheck <= end;
+      });
+
+      // Activar/Desactivar motor de telemetría silenciosa BYOD con Geocerca
       if (hasGeoActive && state.user?.role !== 'admin') {
-         byodService.startTracking(session.user.id);
+         byodService.startTracking(session.user.id, activeShiftLocal?.businesses);
       } else {
          byodService.stopTracking();
       }
@@ -186,11 +194,12 @@ window.fetchByodDashboard = async () => {
   render();
   try {
     // Parche Maestro: Decoplar consultas relacionales para evitar error de schema cache (HTTP 400)
-    const [hbRes, scRes, logsRes, shiftRes] = await Promise.all([
+    const [hbRes, scRes, logsRes, shiftRes, telRes] = await Promise.all([
       supabase.from('device_heartbeats').select('*').order('timestamp', { ascending: false }).limit(150),
       supabase.from('operational_scores').select('*').order('score', { ascending: false }),
-      supabase.from('system_logs').select('*').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(10),
-      supabase.from('shifts').select('*, businesses(id, name, lat, lng, geofence_radius_meters)').is('end_time', null)
+      supabase.from('system_logs').select('*').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(20),
+      supabase.from('shifts').select('*, businesses(id, name, lat, lng, geofence_radius_meters)').is('end_time', null),
+      supabase.from('system_logs').select('message').eq('type', 'TELEGRAM_CONFIG').order('timestamp', { ascending: false }).limit(1)
     ]);
     
     if (hbRes.error) throw hbRes.error;
@@ -202,6 +211,12 @@ window.fetchByodDashboard = async () => {
     state.byodScores = scRes.data || [];
     state.byodSecurityLogs = logsRes.data || [];
     state.byodActiveShifts = shiftRes.data || [];
+    
+    try {
+      state.byodTelegramConfig = telRes.data?.[0] ? JSON.parse(telRes.data[0].message) : null;
+    } catch(e) {
+      state.byodTelegramConfig = null;
+    }
     
     // Hidratación Autónoma del personal para búsquedas en memoria impecables
     if (!state.employees || state.employees.length === 0) {
@@ -2150,47 +2165,144 @@ const render = () => {
   }
 
   else if (state.view === 'byod_dashboard') {
+    // 1. Computar cuántos colaboradores están FUERA DE SEDE en este preciso momento
+    const currentActiveSignals = {};
+    (state.byodHeartbeats || []).forEach(hb => {
+      if (!currentActiveSignals[hb.user_id]) {
+        currentActiveSignals[hb.user_id] = hb;
+      }
+    });
+
+    let totalOutside = 0;
+    Object.values(currentActiveSignals).forEach(hb => {
+      const activeShift = (state.byodActiveShifts || []).find(s => s.user_id === hb.user_id);
+      const biz = activeShift?.businesses || (state.businesses || []).find(b => b.id === activeShift?.business_id);
+      
+      if (hb.lat && hb.lng && biz && biz.lat && biz.lng) {
+        const distMeters = window.getDistanceInMeters(hb.lat, hb.lng, biz.lat, biz.lng);
+        const maxRadius = biz.geofence_radius_meters || 100;
+        if (distMeters > maxRadius) {
+          totalOutside++;
+        }
+      }
+    });
+
     html = `
+      <style>
+        @keyframes pulse-alert-red {
+          0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.6); transform: scale(1); }
+          50% { transform: scale(1.05); }
+          70% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); transform: scale(1); }
+        }
+        @keyframes pulse-alert-green {
+          0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+          70% { box-shadow: 0 0 0 12px rgba(16, 185, 129, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+        }
+        .pulse-alert-red { animation: pulse-alert-red 1.5s infinite; }
+        .pulse-alert-green { animation: pulse-alert-green 2.5s infinite; }
+        
+        @keyframes marker-pulse-red {
+          0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+          70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+        }
+        
+        #byod-leaflet-map {
+          border-bottom-right-radius: 24px;
+          border-bottom-left-radius: 24px;
+          z-index: 1;
+        }
+        
+        /* Arreglo Leaflet panes z-index */
+        .leaflet-pane { z-index: 1 !important; }
+        .leaflet-top, .leaflet-bottom { z-index: 2 !important; }
+
+        @media (max-width: 992px) {
+          .byod-dashboard-grid {
+            grid-template-columns: 1fr !important;
+          }
+        }
+      </style>
+
       <header class="main-header" style="background:#0f172a; color:white; border-bottom: 1px solid #1e293b;">
         <div class="logo-container">
           <div class="logo-icon" style="background:rgba(255,255,255,0.1);"><i data-lucide="shield-check" style="color:#10b981;"></i></div>
           <div class="header-title">
             <p class="role-tag" style="background:#10b981; color:white;">BYOD SECURE</p>
-            <h1 style="color:white;">Auditoría Operacional</h1>
+            <h1 style="color:white;">Centro de Monitoreo Táctico</h1>
           </div>
         </div>
         <div class="header-actions">
-          <button onclick="window.fetchByodDashboard()" class="btn-secondary" style="background:rgba(255,255,255,0.1); border-color:#334155; color:white;"><i data-lucide="refresh-cw" style="width:14px; margin-right:5px;"></i> ACTUALIZAR</button>
-          <div onclick="state.view='manager_dashboard';render()" class="icon-btn pill" style="background:rgba(255,255,255,0.1); color:white; border:none;">Regresar</div>
+          <button onclick="window.fetchByodDashboard()" class="btn-secondary" style="background:rgba(255,255,255,0.1); border-color:#334155; color:white; border-radius:12px;"><i data-lucide="refresh-cw" style="width:14px; margin-right:5px;"></i> ACTUALIZAR</button>
+          <div onclick="state.view='manager_dashboard';render()" class="icon-btn pill" style="background:rgba(255,255,255,0.1); color:white; border:none; cursor:pointer; border-radius:12px;">Regresar</div>
         </div>
       </header>
 
       <div class="container" style="max-width:1300px; margin-top:30px; padding-bottom:80px;">
-        <!-- ALERTA DE SEGURIDAD FLOTANTE (Si hay logs recientes) -->
-        ${(state.byodSecurityLogs || []).length > 0 ? `
-          <div style="background:#fef2f2; border-left:5px solid #ef4444; padding:15px 20px; border-radius:12px; margin-bottom:30px; display:flex; align-items:center; gap:15px;">
-            <div style="background:#fee2e2; color:#ef4444; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
-              <i data-lucide="alert-triangle" style="width:20px;"></i>
-            </div>
-            <div style="flex:1;">
-              <p style="font-weight:800; font-size:13px; color:#991b1b; text-transform:uppercase; letter-spacing:0.5px;">ALERTA CRÍTICA RECIENTE</p>
-              <p style="font-size:13px; color:#b91c1c; margin-top:2px;">${JSON.parse(state.byodSecurityLogs[0].message)?.text || 'Incidente de seguridad detectado'}</p>
-            </div>
-            <span style="font-size:11px; color:#ef4444; font-weight:700;">Hace un momento</span>
+        
+        <!-- 🚨 BANNER DE ESTADO MAESTRO -->
+        <div style="display:flex; align-items:center; gap:20px; padding:22px 25px; border-radius:20px; margin-bottom:30px; 
+            background:${totalOutside > 0 ? '#fef2f2' : '#ecfdf5'}; 
+            border:2px solid ${totalOutside > 0 ? '#fca5a5' : '#a7f3d0'};
+            box-shadow: 0 10px 25px -5px ${totalOutside > 0 ? 'rgba(239,68,68,0.12)' : 'rgba(16,185,129,0.08)'}; transition: all 0.3s ease;">
+            
+          <div class="${totalOutside > 0 ? 'pulse-alert-red' : 'pulse-alert-green'}" style="
+              width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0;
+              background:${totalOutside > 0 ? '#ef4444' : '#10b981'}; color:white; border:3px solid white; box-shadow:0 4px 12px rgba(0,0,0,0.1);">
+            <i data-lucide="${totalOutside > 0 ? 'shield-alert' : 'shield-check'}" style="width:24px;"></i>
           </div>
-        ` : ''}
-
-        <div style="display:grid; grid-template-columns: 1fr 2fr; gap:30px; align-items:start;">
           
-          <!-- 📊 COLUMNA IZQUIERDA: SCORES OPERACIONALES -->
+          <div style="flex:1;">
+            <h2 style="font-size:18px; font-weight:900; color:${totalOutside > 0 ? '#991b1b' : '#065f46'}; margin:0;">
+              ${totalOutside > 0 ? `🚨 ¡ALERTA CRÍTICA! ${totalOutside} Colaborador(es) fuera de rango` : '🟢 SISTEMA SEGURO: Todo el personal dentro de sede'}
+            </h2>
+            <p style="font-size:13px; color:${totalOutside > 0 ? '#b91c1c' : '#047857'}; margin-top:2px; font-weight:600; opacity:0.9;">
+              ${totalOutside > 0 ? 'Abandono de geoperímetro detectado en tiempo real. Verifique el mapa interactivo.' : 'Monitoreo en vivo activo. Geocercas satelitales 100% operativas.'}
+            </p>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: 1fr 2.2fr; gap:30px; align-items:start;" class="byod-dashboard-grid">
+          
+          <!-- 📊 COLUMNA IZQUIERDA: SCORES Y CONFIGURACIONES -->
           <div style="display:flex; flex-direction:column; gap:25px;">
-            <div class="card" style="padding:25px;">
-              <h3 style="font-size:15px; font-weight:800; margin-bottom:20px; display:flex; align-items:center; gap:8px; color:#334155;">
+            
+            <!-- 🔔 TARJETA CONFIGURACIÓN TELEGRAM -->
+            <div class="card" style="padding:25px; border-radius:22px; background:#0f172a; color:white; border:none; box-shadow:0 15px 30px -10px rgba(15,23,42,0.3);">
+              <h3 style="font-size:16px; font-weight:900; color:white; margin:0 0 15px 0; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="send" style="width:18px; color:#38bdf8;"></i> ALERTAS EN TU CELULAR
+              </h3>
+              
+              <div style="background:rgba(56,189,248,0.08); padding:15px; border-radius:14px; font-size:11px; line-height:1.6; color:#bae6fd; margin-bottom:20px; border:1px dashed rgba(56,189,248,0.25);">
+                 <p style="margin:0 0 8px 0; font-weight:800; color:white; font-size:12px; display:flex; align-items:center; gap:5px;"><i data-lucide="lightbulb" style="width:13px; color:#f59e0b;"></i> Instrucciones de Configuración:</p>
+                 1. Abre Telegram en tu celular y busca el bot: <b>@userinfobot</b>.<br>
+                 2. Inicia conversación y copia tu número de <b>Id</b>.<br>
+                 3. Pégalo abajo. ¡Empezarás a recibir notificaciones de inmediato!
+              </div>
+
+              <form onsubmit="window.saveTelegramConfig(event)" style="display:flex; flex-direction:column; gap:18px;">
+                <input type="hidden" name="bot_token" value="${state.byodTelegramConfig?.botToken || '8037545998:AAH4zgAxhoNbZ1WKJXmCElwq7oHzi7IJ1LY'}">
+                <div class="form-group" style="margin:0;">
+                  <label style="color:#94a3b8; font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px; display:block;">Tu Chat ID de Telegram</label>
+                  <div style="position:relative; display:flex; align-items:center;">
+                    <i data-lucide="user" style="position:absolute; left:12px; width:16px; color:#64748b;"></i>
+                    <input type="text" name="chat_id" class="form-input" style="background:#1e293b; color:white; border:1px solid #334155; border-radius:12px; padding-left:38px; font-weight:800; font-size:14px; width:100%;" required placeholder="Escribe tu ID aquí..." value="${state.byodTelegramConfig?.chatId || ''}">
+                  </div>
+                </div>
+                <button class="btn-primary" style="width:100%; background:#0284c7; border:none; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:8px; font-size:12px; font-weight:800; padding:12px 0; cursor:pointer; box-shadow:0 4px 12px rgba(2,132,199,0.3); transition:background 0.2s;"><i data-lucide="check-circle" style="width:15px;"></i> VINCULAR MI CELULAR</button>
+              </form>
+            </div>
+
+            <!-- SCORES -->
+            <div class="card" style="padding:25px; border-radius:22px;">
+              <h3 style="font-size:15px; font-weight:800; margin:0 0 20px 0; display:flex; align-items:center; gap:8px; color:#334155;">
                 <i data-lucide="award" style="width:16px; color:#6366f1;"></i> RANKING DE CUMPLIMIENTO
               </h3>
               
               <div style="display:flex; flex-direction:column; gap:15px;">
-                ${(state.byodScores || []).length === 0 ? '<p style="text-align:center; font-size:12px; color:var(--text-muted); padding:20px;">Calculando primeros índices...</p>' : state.byodScores.map(scoreItem => {
+                ${(state.byodScores || []).length === 0 ? '<p style="text-align:center; font-size:12px; color:var(--text-muted); padding:20px;">Calculando índices...</p>' : state.byodScores.slice(0, 6).map(scoreItem => {
                   const pct = parseFloat(scoreItem.score || 100).toFixed(1);
                   let color = '#10b981';
                   if (pct < 85) color = '#f59e0b';
@@ -2199,14 +2311,14 @@ const render = () => {
                   const scoreUser = state.employees?.find(e => e.id === scoreItem.user_id) || (state.user?.id === scoreItem.user_id ? state.user : null);
                   
                   return `
-                    <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:15px; border-radius:12px; display:flex; align-items:center; justify-content:space-between;">
+                    <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:12px 15px; border-radius:14px; display:flex; align-items:center; justify-content:space-between;">
                       <div>
-                        <p style="font-weight:700; font-size:14px; color:#1e293b;">${scoreUser?.name || 'Colaborador'}</p>
+                        <p style="font-weight:800; font-size:13px; color:#1e293b; margin:0;">${scoreUser?.name || 'Colaborador'}</p>
                         <p style="font-size:11px; color:#64748b; margin-top:2px;">Incidencias: ${scoreItem.incidents_count || 0}</p>
                       </div>
                       <div style="text-align:right;">
-                        <span style="font-size:18px; font-weight:900; color:${color}">${pct}%</span>
-                        <div style="width:80px; height:6px; background:#e2e8f0; border-radius:3px; overflow:hidden; margin-top:5px;">
+                        <span style="font-size:16px; font-weight:900; color:${color}">${pct}%</span>
+                        <div style="width:70px; height:5px; background:#e2e8f0; border-radius:3px; overflow:hidden; margin-top:4px;">
                           <div style="width:${pct}%; height:100%; background:${color}; border-radius:3px;"></div>
                         </div>
                       </div>
@@ -2216,143 +2328,77 @@ const render = () => {
               </div>
             </div>
 
-            <!-- CAJA INFO TECNICA -->
-            <div class="card" style="background:#0f172a; color:rgba(255,255,255,0.7); padding:20px; border:none;">
-              <h4 style="color:white; font-size:13px; font-weight:700; margin-bottom:10px; display:flex; align-items:center; gap:6px;"><i data-lucide="info" style="width:14px;"></i> ¿Cómo funciona?</h4>
-              <p style="font-size:11px; line-height:1.6;">Este monitor analiza el latido del dispositivo en tiempo real cada 5 minutos únicamente cuando hay turnos activos. El score deduce puntos automáticamente ante desconexiones y abandonos reiterados de la aplicación.</p>
-            </div>
           </div>
 
-          <!-- 📡 COLUMNA DERECHA: MONITOREO Y UBICACIÓN -->
+          <!-- 📡 COLUMNA DERECHA: MAPA E INCIDENCIAS -->
           <div style="display:flex; flex-direction:column; gap:25px;">
             
-            <!-- SECCIÓN DE LOCALIZACIÓN ACTIVA -->
-            <div class="card" style="padding:25px;">
-              <div style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center;">
-                <h3 style="font-size:16px; font-weight:800; color:#1e293b; display:flex; align-items:center; gap:8px; margin:0;">
-                  <i data-lucide="map-pin" style="width:18px; color:#ef4444;"></i> UBICACIÓN EN TIEMPO REAL
+            <!-- 🗺️ MAPA SATELITAL LEAFLET -->
+            <div class="card" style="padding:0; overflow:hidden; border-radius:24px; box-shadow:0 10px 25px -5px rgba(0,0,0,0.05); position:relative; border: 1px solid #e2e8f0;">
+              <div style="padding:20px 25px; background:#ffffff; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                <h3 style="margin:0; font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:8px;">
+                   <i data-lucide="navigation" style="width:18px; color:#3b82f6;"></i> SEGUIMIENTO SATELITAL EN VIVO
                 </h3>
-                <span style="font-size:11px; background:#ecfdf5; color:#047857; padding:4px 10px; border-radius:20px; font-weight:700;">GEOPERÍMETRO ACTIVO</span>
+                <div style="display:flex; align-items:center; gap:6px; background:#ecfdf5; border:1px solid #a7f3d0; color:#047857; padding:5px 12px; border-radius:30px; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:0.5px;">
+                  <span style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block; animation: pulse-alert-green 1.5s infinite;"></span>
+                  Geocercas Activas
+                </div>
               </div>
-
-              <div style="display:flex; flex-direction:column; gap:15px;">
-                ${(() => {
-                  // 1. Agrupar por colaborador para tomar solo la señal más reciente
-                  const latestByEmployee = {};
-                  (state.byodHeartbeats || []).forEach(hb => {
-                    if (!latestByEmployee[hb.user_id]) {
-                      latestByEmployee[hb.user_id] = hb;
-                    }
-                  });
-
-                  const uniqueActiveList = Object.values(latestByEmployee);
-
-                  if (uniqueActiveList.length === 0) {
-                    return '<div style="padding:40px; text-align:center; color:#64748b; font-size:12px; background:#f8fafc; border-radius:12px;">No hay señales activas transmitiendo en este momento...</div>';
-                  }
-
-                  return uniqueActiveList.map(hb => {
-                    const hbUser = state.employees?.find(e => e.id === hb.user_id) || (state.user?.id === hb.user_id ? state.user : null);
-                    const activeShift = (state.byodActiveShifts || []).find(s => s.user_id === hb.user_id);
-                    const biz = activeShift?.businesses || (state.businesses || []).find(b => b.id === activeShift?.business_id);
-
-                    let geofenceStatus = "⚪ SIN COORDENADAS";
-                    let statusColor = "#64748b";
-                    let badgeBg = "#f1f5f9";
-                    let distanceDetail = "Señal de GPS no enviada o desactivada.";
-                    let isOutside = false;
-
-                    if (hb.lat && hb.lng && biz && biz.lat && biz.lng) {
-                       const distMeters = window.getDistanceInMeters(hb.lat, hb.lng, biz.lat, biz.lng);
-                       const maxRadius = biz.geofence_radius_meters || 150;
-                       isOutside = distMeters > maxRadius;
-
-                       geofenceStatus = isOutside ? "🚨 FUERA DEL NEGOCIO" : "🟢 DENTRO DEL RANGO";
-                       statusColor = isOutside ? "#ef4444" : "#10b981";
-                       badgeBg = isOutside ? "#fef2f2" : "#ecfdf5";
-                       
-                       const distText = distMeters > 1000 ? `${(distMeters/1000).toFixed(2)} km` : `${Math.round(distMeters)} metros`;
-                       distanceDetail = `Ubicado a <strong>${distText}</strong> de la sede <strong>${biz.name}</strong> (Límite: ${maxRadius}m).`;
-                    } else if (hb.lat && hb.lng) {
-                       geofenceStatus = "🔵 RASTREO ACTIVO";
-                       statusColor = "#3b82f6";
-                       badgeBg = "#eff6ff";
-                       distanceDetail = "Transmitiendo coordenadas, pero no tiene turno registrado hoy en esta sede.";
-                    }
-
-                    const lastPingTime = new Date(hb.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'});
-                    const mapLink = (hb.lat && hb.lng) ? `https://www.google.com/maps/search/?api=1&query=${hb.lat},${hb.lng}` : '#';
-
-                    return `
-                      <div style="background:white; border:1.5px solid ${isOutside ? '#fee2e2' : '#f1f5f9'}; border-radius:16px; padding:20px; display:flex; flex-direction:column; gap:15px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.03);">
-                        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-                          <div style="display:flex; align-items:center; gap:12px;">
-                            <div style="background:${isOutside ? '#fee2e2' : '#f1f5f9'}; color:${isOutside ? '#ef4444' : '#475569'}; width:40px; height:40px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:16px;">
-                              ${(hbUser?.name || 'C').charAt(0).toUpperCase()}
-                            </div>
-                            <div>
-                              <p style="font-weight:800; font-size:15px; color:#1e293b; margin:0;">${hbUser?.name || 'Colaborador'}</p>
-                              <p style="font-size:11px; color:#64748b; margin-top:2px;">Último reporte: ⏱️ ${lastPingTime}</p>
-                            </div>
-                          </div>
-                          
-                          <span style="display:inline-flex; align-items:center; font-size:11px; font-weight:800; padding:6px 12px; border-radius:30px; gap:4px; background:${badgeBg}; color:${statusColor}; border:1px solid ${statusColor}33;">
-                             ${geofenceStatus}
-                          </span>
-                        </div>
-
-                        <div style="background:#f8fafc; border-radius:12px; padding:12px 15px; font-size:12px; color:#475569; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-                          <span>📍 ${distanceDetail}</span>
-                          ${(hb.lat && hb.lng) ? `
-                            <a href="${mapLink}" target="_blank" style="background:#1e293b; color:white; padding:8px 14px; border-radius:8px; font-size:11px; font-weight:800; display:inline-flex; align-items:center; gap:6px; text-decoration:none; transition:background 0.2s;" onmouseover="this.style.background='#334155'" onmouseout="this.style.background='#1e293b'">
-                              <i data-lucide="map" style="width:12px;"></i> RASTREAR EN MAPA
-                            </a>
-                          ` : `
-                            <span style="font-size:11px; color:#94a3b8; font-weight:700;">SIN GPS</span>
-                          `}
-                        </div>
-                      </div>
-                    `;
-                  }).join('');
-                })()}
-              </div>
+              
+              <!-- DIV CONTENEDOR DE LEAFLET MAP -->
+              <div id="byod-leaflet-map" style="height:450px; width:100%; background:#f8fafc;"></div>
             </div>
 
-            <!-- HISTORIAL RECIENTE DE SEÑALES (Simplificado) -->
-            <div class="card" style="padding:0; overflow:hidden;">
-              <div style="padding:15px 20px; border-bottom:1px solid #e2e8f0; background:#f8fafc; display:flex; justify-content:space-between; align-items:center;">
-                <h4 style="font-size:13px; font-weight:800; color:#475569; margin:0; display:flex; align-items:center; gap:6px;">
-                  <i data-lucide="activity" style="width:14px;"></i> DETALLE DE HISTORIAL COMPLETO
-                </h4>
-                <span style="font-size:10px; background:#e2e8f0; padding:3px 8px; border-radius:10px; font-weight:700; color:#64748b;">LOGS</span>
-              </div>
-              <div style="max-height:300px; overflow-y:auto;">
-                <table style="width:100%; border-collapse:collapse; font-size:12px;">
-                  <thead style="background:#f1f5f9; position:sticky; top:0; text-align:left; color:#64748b; border-bottom:1px solid #e2e8f0;">
-                    <tr>
-                      <th style="padding:10px 15px; font-weight:700;">COLABORADOR</th>
-                      <th style="padding:10px 15px; font-weight:700;">ESTADO APP</th>
-                      <th style="padding:10px 15px; font-weight:700; text-align:center;">BAT</th>
-                      <th style="padding:10px 15px; font-weight:700; text-align:right;">HORA</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${(state.byodHeartbeats || []).slice(0, 20).map(hb => {
-                      const isFg = hb.app_state === 'FOREGROUND';
-                      const hbUser = state.employees?.find(e => e.id === hb.user_id) || (state.user?.id === hb.user_id ? state.user : null);
-                      return `
-                        <tr style="border-bottom:1px solid #f1f5f9;">
-                          <td style="padding:10px 15px; font-weight:700; color:#334155;">${hbUser?.name || 'Colaborador'}</td>
-                          <td style="padding:10px 15px;">
-                            <span style="font-weight:700; color:${isFg ? '#10b981' : '#ea580c'};">${isFg ? 'ACTIVA' : 'BLOQUEADO'}</span>
-                          </td>
-                          <td style="padding:10px 15px; text-align:center; font-weight:700;">${hb.battery_level || 0}%</td>
-                          <td style="padding:10px 15px; text-align:right; color:#64748b;">${new Date(hb.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
-                        </tr>
-                      `;
-                    }).join('')}
-                  </tbody>
-                </table>
+            <!-- 🕒 BITÁCORA CRONOLÓGICA DE CAJA NEGRA -->
+            <div class="card" style="padding:25px; border-radius:24px; border: 1px solid #e2e8f0;">
+              <h3 style="font-size:16px; font-weight:900; color:#1e293b; margin:0 0 25px 0; display:flex; align-items:center; gap:8px;">
+                <i data-lucide="history" style="width:18px; color:#475569;"></i> REGISTROS DE CAJA NEGRA (BITÁCORA CRÍTICA)
+              </h3>
+              
+              <div style="display:flex; flex-direction:column; gap:20px; position:relative; padding-left:25px; border-left:2px solid #f1f5f9; max-height:400px; overflow-y:auto;">
+                ${(state.byodSecurityLogs || []).length === 0 ? `
+                  <div style="padding:40px 20px; text-align:center; color:#94a3b8; font-size:12px; background:#fafafa; border-radius:16px; border:1px dashed #e2e8f0;">
+                    <i data-lucide="shield-check" style="width:32px; color:#cbd5e1; margin-bottom:10px;"></i>
+                    <p style="margin:0;">Ningún incidente registrado en el ciclo operativo actual.</p>
+                  </div>
+                ` : state.byodSecurityLogs.map(log => {
+                  let logText = 'Actividad de Seguridad';
+                  const isCritical = log.severity === 'CRITICAL';
+                  try {
+                    const parsed = JSON.parse(log.message);
+                    logText = parsed.text || 'Alerta de seguridad';
+                  } catch(e) { logText = log.message; }
+
+                  const logTime = new Date(log.timestamp);
+                  const timeStr = logTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                  const dateStr = logTime.toLocaleDateString([], {day: '2-digit', month:'short'});
+
+                  return `
+                    <div style="position:relative;">
+                      <!-- Indicador flotante en línea de tiempo -->
+                      <span style="position:absolute; left:-34px; top:2px; width:16px; height:16px; border-radius:50%; 
+                          background:${isCritical ? '#fee2e2' : '#ecfdf5'}; 
+                          border:3px solid ${isCritical ? '#ef4444' : '#10b981'}; 
+                          display:inline-block; box-shadow: 0 2px 4px rgba(0,0,0,0.05);"></span>
+                      
+                      <div style="background:#ffffff; border:1px solid #edf2f7; padding:14px 18px; border-radius:16px; display:flex; justify-content:space-between; align-items:center; gap:15px; box-shadow:0 2px 4px rgba(0,0,0,0.01);">
+                        <div style="flex:1;">
+                          <p style="font-size:12.5px; font-weight:800; color:#1e293b; margin:0; line-height:1.4;">${logText}</p>
+                          <p style="font-size:10.5px; color:#64748b; margin-top:4px; font-weight:700; display:flex; align-items:center; gap:5px;">
+                            <i data-lucide="clock" style="width:11px; color:#94a3b8;"></i> ${dateStr}, ${timeStr}
+                            <span style="color:#e2e8f0;">|</span>
+                            <span style="color:#94a3b8; font-weight:600;">${log.module || 'Sistema'}</span>
+                          </p>
+                        </div>
+                        <span style="font-size:9.5px; font-weight:900; text-transform:uppercase; letter-spacing:0.5px; padding:5px 12px; border-radius:20px; 
+                            background:${isCritical ? '#fee2e2' : '#f1f5f9'}; 
+                            color:${isCritical ? '#b91c1c' : '#475569'}; flex-shrink:0; border:1px solid ${isCritical ? '#fca5a5' : '#e2e8f0'};">
+                          ${isCritical ? '🚨 ALERTA' : 'ℹ️ REGISTRO'}
+                        </span>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
               </div>
             </div>
 
@@ -3396,6 +3442,13 @@ const render = () => {
         }
       });
     }, 50);
+  }
+  
+  // INICIALIZAR MAPA LEAFLET PARA CENTRO DE CONTROL BYOD
+  if (state.view === 'byod_dashboard') {
+    setTimeout(() => {
+       if (window.initByodMap) window.initByodMap();
+    }, 100);
   }
   
   // ACTIVAR ICONOS LUCIDE
@@ -5190,6 +5243,161 @@ window.getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 
   return R * c; // Distancia en metros
+};
+
+// 📡 BYOD TACTICAL DASHBOARD - MAPA INTERACTIVO LEAFLET
+window.initByodMap = () => {
+  const container = document.getElementById('byod-leaflet-map');
+  if (!container || typeof L === 'undefined') {
+    console.warn("[BYOD_MAP] Contenedor de mapa o librería Leaflet no disponibles.");
+    return;
+  }
+
+  // Prevenir instanciaciones múltiples
+  if (window.byodLeafletInstance) {
+    try {
+      window.byodLeafletInstance.remove();
+    } catch(e) {}
+    window.byodLeafletInstance = null;
+  }
+
+  // Resolver locales con GPS válido
+  const validSedes = (state.businesses || []).filter(b => b.lat && b.lng);
+  
+  // Centrado inicial por defecto (Bogotá) si no hay locales creados
+  let centerLat = 4.60971;
+  let centerLng = -74.08175;
+
+  if (validSedes.length > 0) {
+    centerLat = validSedes[0].lat;
+    centerLng = validSedes[0].lng;
+  }
+
+  try {
+    // 1. Inicializar Mapa
+    const map = L.map('byod-leaflet-map', {
+      zoomControl: true,
+      fadeAnimation: true
+    }).setView([centerLat, centerLng], 16);
+    window.byodLeafletInstance = map;
+
+    // 2. Tile Layer (Estilo Moderno y Limpio: CartoDB Voyager)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: 'Surtihogar G&C &copy; CartoDB'
+    }).addTo(map);
+
+    const bounds = [];
+
+    // 3. Dibujar Círculos de Geocerca (Zonas Seguras)
+    validSedes.forEach(s => {
+      const radius = s.geofence_radius_meters || 100;
+      L.circle([s.lat, s.lng], {
+        color: '#10b981',
+        fillColor: '#10b981',
+        fillOpacity: 0.12,
+        weight: 2,
+        dashArray: '6, 8'
+      }).addTo(map).bindPopup(`<b>📍 SEDE: ${s.name}</b><br>Perímetro seguro: <b>${radius} metros</b>`);
+      bounds.push([s.lat, s.lng]);
+    });
+
+    // 4. Dibujar Colaboradores Activos
+    const latestByEmployee = {};
+    (state.byodHeartbeats || []).forEach(hb => {
+      if (!latestByEmployee[hb.user_id] && hb.lat && hb.lng) {
+        latestByEmployee[hb.user_id] = hb;
+      }
+    });
+
+    Object.values(latestByEmployee).forEach(hb => {
+      const emp = state.employees?.find(e => e.id === hb.user_id) || (state.user?.id === hb.user_id ? state.user : null);
+      const name = emp?.name || 'Colaborador';
+      
+      const activeShift = (state.byodActiveShifts || []).find(s => s.user_id === hb.user_id);
+      const biz = activeShift?.businesses || validSedes.find(b => b.id === activeShift?.business_id);
+      
+      let isOutside = false;
+      if (biz && biz.lat && biz.lng) {
+        const dist = window.getDistanceInMeters(hb.lat, hb.lng, biz.lat, biz.lng);
+        isOutside = dist > (biz.geofence_radius_meters || 100);
+      }
+
+      const color = isOutside ? '#ef4444' : '#3b82f6';
+      const customClass = isOutside ? 'marker-pulse-red' : '';
+
+      // Crear Marcador con Inicial Flotante
+      const icon = L.divIcon({
+        className: 'custom-div-icon',
+        html: `<div class="${customClass}" style="background:${color}; color:white; width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:12px; border:3px solid white; box-shadow:0 4px 10px rgba(0,0,0,0.25); transition: background 0.3s;">${name.charAt(0).toUpperCase()}</div>`,
+        iconSize: [32, 32],
+        iconAnchor: [16, 16]
+      });
+
+      const lastPing = new Date(hb.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+
+      L.marker([hb.lat, hb.lng], { icon })
+        .addTo(map)
+        .bindPopup(`
+          <div style="font-family:sans-serif; font-size:12px;">
+            <b style="font-size:13px; color:#1e293b;">👤 ${name}</b><br>
+            <span style="display:inline-block; margin-top:4px; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold; color:white; background:${isOutside ? '#ef4444':'#10b981'};">
+              ${isOutside ? '🔴 FUERA DE RANGO':'🟢 DENTRO DE SEDE'}
+            </span><br>
+            <span style="color:#64748b; display:block; margin-top:5px;">⚡ Batería: <b>${hb.battery_level || 0}%</b></span>
+            <span style="color:#64748b;">⏱️ Reporte: <b>${lastPing}</b></span>
+          </div>
+        `);
+      
+      bounds.push([hb.lat, hb.lng]);
+    });
+
+    // 5. Auto-escalar zoom para encuadrar todo
+    if (bounds.length > 0) {
+      map.fitBounds(bounds, { padding: [50, 50] });
+    }
+
+  } catch(err) {
+    console.error("[BYOD_MAP] Error de renderizado:", err);
+  }
+};
+
+// 🔔 GUARDAR CONFIGURACIÓN DE TELEGRAM PARA EL ADMINISTRADOR
+window.saveTelegramConfig = async (e) => {
+  e.preventDefault();
+  const form = e.target;
+  const botToken = form.bot_token.value.trim() || "8037545998:AAH4zgAxhoNbZ1WKJXmCElwq7oHzi7IJ1LY";
+  const chatId = form.chat_id.value.trim();
+
+  if (!chatId) {
+    window.showToast("Por favor escribe tu ID de Telegram.", "warning");
+    return;
+  }
+
+  state.loading = true;
+  render();
+
+  try {
+    const payload = { botToken, chatId };
+    const { error } = await supabase.from('system_logs').insert({
+      type: 'TELEGRAM_CONFIG',
+      module: 'Configuración',
+      severity: 'INFO',
+      message: JSON.stringify(payload)
+    });
+
+    if (error) throw error;
+    
+    window.showToast("✅ ¡Celular vinculado con éxito! Recibirás alertas inmediatas.", "success");
+    
+    // Recargar la vista para refrescar el dashboard
+    await window.fetchByodDashboard();
+  } catch(err) {
+    window.showToast("Error al vincular celular: " + err.message, "danger");
+  } finally {
+    state.loading = false;
+    render();
+  }
 };
 
 window.registerGeolocation = async (type) => {
