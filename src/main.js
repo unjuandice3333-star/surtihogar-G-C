@@ -3612,27 +3612,26 @@ window.generateSupplierPdf = async () => {
         window.showToast("⚙️ Procesando archivo nativo...", "info");
         const base64 = doc.output('datauristring').split(',')[1];
         
-        // 1. Escribir físicamente el archivo en la carpeta pública "Documentos" del celular
+        // 1. Escribir el archivo en la caché interna y segura del aplicativo (Sin requerir permisos molestos)
         const writeResult = await Filesystem.writeFile({
           path: safeName,
           data: base64,
-          directory: Directory.Documents,
+          directory: Directory.Cache,
           recursive: true
         });
         
-        window.showToast(`📁 Guardado en Documentos (${safeName})`, "success");
-        
-        // 2. Lanzar la hoja de compartir nativa del celular con el enlace al archivo local
+        // 2. Lanzar la hoja de compartir nativa del celular de forma inmediata usando el archivo
         await Share.share({
           title: `Reporte Contable - ${s.name}`,
-          text: `Comparto el reporte contable de ${s.name}.`,
+          text: `Adjunto reporte de ${s.name}.`,
           url: writeResult.uri
         });
         
         isCompleted = true;
+        window.showToast("✅ Enviado al menú de compartir.", "success");
       } catch (nativeErr) {
         console.error("Fallo en almacenamiento/compartir nativo:", nativeErr);
-        window.showToast("⚠️ Error al acceder al disco nativo. Intentando alternativas...", "warning");
+        window.showToast("⚠️ Error al procesar en móvil. Intentando alternativas web...", "warning");
       }
     }
 
