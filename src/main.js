@@ -319,7 +319,7 @@ window.openModal = async (type, shiftId = null, userId = null, date = null) => {
   }, 50);
 };
 
-window.saveSurtihogarSale = async (e) => {
+window.saveBaratilloSale = async (e) => {
   e.preventDefault();
   const btn = e.submitter || e.target.querySelector('button[type="submit"]');
   const originalHtml = btn.innerHTML;
@@ -747,8 +747,7 @@ const render = () => {
     const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
     const activeBiz = state.businesses.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
-    const clusterKeywords = ['electro', 'mueble', 'ropa', 'pañalera', 'surtihogar'];
-    const isSurtihogar = activeBiz && clusterKeywords.some(kw => activeBiz.name.toLowerCase().includes(kw));
+    const isBaratillo = activeBiz && activeBiz.name.toLowerCase().includes('baratillo');
 
     html = `
       <header class="main-header">
@@ -779,12 +778,12 @@ const render = () => {
         </style>
         
         <!-- PRODUCTOS -->
-        ${isSurtihogar ? `
+        ${isBaratillo ? `
           <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; background:white; border-radius:20px; box-shadow:0 4px 6px rgba(0,0,0,0.05); padding:40px;">
             <div style="width:100px; height:100px; background:#f1f5f9; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-bottom:20px;">
               <i data-lucide="shopping-bag" style="width:50px; height:50px; color:var(--primary);"></i>
             </div>
-            <h2 style="font-size:28px; margin-bottom:10px; color:var(--text);">Punto de Venta Surtihogar</h2>
+            <h2 style="font-size:28px; margin-bottom:10px; color:var(--text);">Punto de Venta El Baratillo</h2>
             <p style="color:var(--text-muted); margin-bottom:40px; text-align:center; max-width:400px;">Registra las ventas directas con una breve descripción y el precio final.</p>
             
             ${(!state.activeShiftBusinessId && state.user?.role !== 'admin') ? `
@@ -792,7 +791,7 @@ const render = () => {
                 ⚠️ TURNO INACTIVO: Registra tu llegada para habilitar ventas.
               </div>
             ` : `
-              <button onclick="state.activeModal='surtihogar_sale';render()" class="btn-primary" style="padding:25px 50px; font-size:20px; border-radius:16px; box-shadow:0 10px 25px rgba(59,130,246,0.3); transition:all 0.2s;">
+              <button onclick="state.activeModal='baratillo_sale';render()" class="btn-primary" style="padding:25px 50px; font-size:20px; border-radius:16px; box-shadow:0 10px 25px rgba(59,130,246,0.3); transition:all 0.2s;">
                 + REGISTRAR VENTA
               </button>
             `}
@@ -2792,7 +2791,7 @@ const render = () => {
 
   // 10. MODALES GLOBALES
   const modalHtml = `
-    ${state.activeModal === 'surtihogar_sale' ? `
+    ${state.activeModal === 'baratillo_sale' ? `
     <div class="modal-overlay">
       <div class="modal-card card" style="max-width:450px;">
         <div class="modal-close" onclick="state.activeModal=null;render()">✕</div>
@@ -2805,7 +2804,7 @@ const render = () => {
             <button onclick="state.activeModal=null;render()" class="btn-primary" style="margin-top:25px; background:#64748b;">ENTENDIDO</button>
           </div>
         ` : `
-          <form onsubmit="window.saveSurtihogarSale(event)">
+          <form onsubmit="window.saveBaratilloSale(event)">
             <div class="form-group">
               <label>Descripción / Producto vendido</label>
               <input type="text" name="description" class="form-input" required placeholder="Ej: Licuadora oster">
