@@ -2428,7 +2428,7 @@ const render = () => {
                   const sellerName = sellerObj?.name || 'Sistema';
 
                   // 🛍️ Render de Productos (soporta productos del inventario y ventas rápidas no formalizadas)
-                  const itemsHtml = items.map(i => {
+                  let itemsHtml = items.map(i => {
                     let prodName = i.products?.name;
                     let pendingBadge = '';
                     
@@ -2454,6 +2454,19 @@ const render = () => {
                       </div>
                     `;
                   }).join('');
+
+                  if (!itemsHtml && sale.note && sale.note.includes('Venta informal')) {
+                    const informalProdName = sale.note.replace('Venta informal: ', '').trim();
+                    itemsHtml = `
+                      <div style="display:flex; justify-content:space-between; margin-bottom:6px; padding-bottom:6px; border-bottom:1px dashed #e2e8f0; gap:10px; line-height:1.3;">
+                        <span style="font-weight:600; color:#334155;">
+                          ${informalProdName} <span style="background:#fefce8; color:#a16207; font-size:9px; font-weight:800; padding:1px 4px; border-radius:4px; border:1px solid #fef08a; margin-left:4px;">DIRECTA</span>
+                          <span style="color:#94a3b8; font-weight:700; margin-left:3px;">(x1)</span>
+                        </span>
+                        <span style="font-weight:700; color:#64748b; font-family:monospace;">${formatCurrency(sale.total)}</span>
+                      </div>
+                    `;
+                  }
 
                   return `
                     <tr style="border-bottom:1px solid #f1f5f9; background:white; transition:background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
@@ -3964,7 +3977,7 @@ window.generateAdminSalesReportPDF = async () => {
       const payMethod = sale.payment_method || 'Efectivo';
 
       // Detalle textual concatenado de productos con recopilación de costos históricos
-      const productsLabel = items.map(i => {
+      let productsLabel = items.map(i => {
         // Prioridad 1: Relación cargada en RAM. Prioridad 2: Lookup directo en inventario
         let pName = i.products?.name;
         let pCost = parseFloat(i.products?.cost) || 0;
@@ -3998,6 +4011,10 @@ window.generateAdminSalesReportPDF = async () => {
 
         return `${pName} [x${itemQty}]`;
       }).join(', ');
+
+      if (!productsLabel && sale.note && sale.note.includes('Venta informal')) {
+        productsLabel = sale.note.replace('Venta informal: ', '').trim() + ' (Directa)';
+      }
 
       // CORRECCIÓN CRÍTICA: Usar 'sale.total' en vez de 'total_amount'
       const saleTotal = parseFloat(sale.total) || 0;
