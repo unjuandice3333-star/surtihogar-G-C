@@ -1967,6 +1967,7 @@ const render = () => {
                       </td>
                       <td style="padding:15px; text-align:center;">
                         <div style="display:flex; justify-content:center; gap:8px;">
+                          <button onclick="window.openSupplierLedger('${idx}')" class="icon-btn" title="Historial de Facturas y Deudas" style="background:rgba(13,148,136,0.1); color:#0d9488; width:32px; height:32px; border-radius:8px;"><i data-lucide="file-text" style="width:14px;"></i></button>
                           <button onclick="window.editSupplier('${idx}')" class="icon-btn" title="Editar" style="background:rgba(59,130,246,0.1); color:var(--primary); width:32px; height:32px; border-radius:8px;"><i data-lucide="edit-2" style="width:14px;"></i></button>
                           <button onclick="window.deleteSupplier('${idx}')" class="icon-btn" title="Eliminar" style="background:rgba(239,68,68,0.1); color:var(--danger); width:32px; height:32px; border-radius:8px;"><i data-lucide="trash-2" style="width:14px;"></i></button>
                         </div>
@@ -2016,9 +2017,12 @@ const render = () => {
                   </div>
 
                   <!-- Actions Footer Area -->
-                  <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-top:8px; padding-top:15px; border-top:1px solid #f1f5f9;">
-                    <button onclick="window.editSupplier('${idx}')" class="btn-secondary" style="height:42px; font-size:12px; font-weight:800; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:6px; background:#f1f5f9; border:none; color:#334155; width:100%;"><i data-lucide="edit-2" style="width:14px;"></i> EDITAR</button>
-                    <button onclick="window.deleteSupplier('${idx}')" class="btn-secondary" style="height:42px; font-size:12px; font-weight:800; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:6px; background:#fef2f2; border:none; color:var(--danger); width:100%;"><i data-lucide="trash-2" style="width:14px;"></i> ELIMINAR</button>
+                  <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px; padding-top:15px; border-top:1px solid #f1f5f9;">
+                    <button onclick="window.openSupplierLedger('${idx}')" class="btn-primary" style="background:#0d9488; font-size:12px; height:42px; font-weight:800; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:6px; width:100%;"><i data-lucide="file-text" style="width:14px;"></i> 📋 VER FACTURAS Y DEUDAS</button>
+                    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+                      <button onclick="window.editSupplier('${idx}')" class="btn-secondary" style="height:40px; font-size:12px; font-weight:800; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:6px; background:#f1f5f9; border:none; color:#334155; width:100%;"><i data-lucide="edit-2" style="width:14px;"></i> EDITAR</button>
+                      <button onclick="window.deleteSupplier('${idx}')" class="btn-secondary" style="height:40px; font-size:12px; font-weight:800; border-radius:12px; display:flex; align-items:center; justify-content:center; gap:6px; background:#fef2f2; border:none; color:var(--danger); width:100%;"><i data-lucide="trash-2" style="width:14px;"></i> BORRAR</button>
+                    </div>
                   </div>
 
                 </div>
@@ -3000,6 +3004,138 @@ const render = () => {
         </div>
       </div>
     </div>` : ''}
+
+    ${state.activeModal === 'supplier_ledger' ? (() => {
+      const s = state.suppliers[state.selectedSupplierIdx];
+      if (!s) return '';
+      const invoices = s.invoices || [];
+      
+      const totalPurchased = invoices.reduce((sum, i) => sum + i.total_amount, 0);
+      const totalPaid = invoices.reduce((sum, i) => sum + (i.payments || []).reduce((s2, p) => s2 + p.amount, 0), 0);
+      const remainingDebt = totalPurchased - totalPaid;
+      
+      return `
+      <div class="modal-overlay">
+        <div class="modal-card card" style="max-width:600px; padding: 25px; max-height: 90vh; overflow-y: auto; border-radius:24px;">
+          <div class="modal-close" onclick="state.activeModal=null;render()">✕</div>
+          
+          <h2 style="margin-bottom:5px; font-weight:800;">📋 Historial: ${s.name}</h2>
+          <p style="font-size:12px; color:var(--text-muted); margin-bottom:20px;">Control y tracking record de facturas y abonos.</p>
+          
+          <!-- RESUMEN CONTABLE -->
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:12px; margin-bottom:25px;">
+            <div style="background:#f8fafc; border:1px solid #e2e8f0; padding:15px; border-radius:15px; text-align:center;">
+              <p style="font-size:10px; color:#64748b; font-weight:800; text-transform:uppercase; letter-spacing:0.5px;">Facturado Total</p>
+              <h3 style="font-size:18px; font-weight:900; color:#1e293b; margin-top:5px;">${formatCurrency(totalPurchased)}</h3>
+            </div>
+            <div style="background:rgba(16,185,129,0.05); border:1px solid rgba(16,185,129,0.2); padding:15px; border-radius:15px; text-align:center;">
+              <p style="font-size:10px; color:#10b981; font-weight:800; text-transform:uppercase; letter-spacing:0.5px;">Abonado Total</p>
+              <h3 style="font-size:18px; font-weight:900; color:#10b981; margin-top:5px;">${formatCurrency(totalPaid)}</h3>
+            </div>
+            <div style="background:${remainingDebt > 0 ? 'rgba(239,68,68,0.05)' : '#f8fafc'}; border:1px solid ${remainingDebt > 0 ? 'rgba(239,68,68,0.2)' : '#e2e8f0'}; padding:15px; border-radius:15px; text-align:center;">
+              <p style="font-size:10px; color:${remainingDebt > 0 ? 'var(--danger)' : '#64748b'}; font-weight:800; text-transform:uppercase; letter-spacing:0.5px;">Deuda Total</p>
+              <h3 style="font-size:18px; font-weight:900; color:${remainingDebt > 0 ? 'var(--danger)' : '#64748b'}; margin-top:5px;">${formatCurrency(remainingDebt)}</h3>
+            </div>
+          </div>
+
+          <!-- SECCIÓN 1: REGISTRAR NUEVA COMPRA -->
+          <div class="card" style="background:#f8fafc; padding:15px; margin-bottom:20px; border:1px dashed #cbd5e1;">
+            <h4 style="font-size:13px; font-weight:800; color:#475569; margin-bottom:12px; display:flex; align-items:center; gap:6px;"><i data-lucide="plus-circle" style="width:16px; color:var(--primary);"></i> REGISTRAR COMPRA / FACTURA</h4>
+            <form onsubmit="window.saveSupplierInvoice(event)" style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+              <div>
+                <label style="font-size:10px; font-weight:700; color:#64748b;"># Número Factura</label>
+                <input type="text" name="invoice_number" class="form-input" placeholder="Ej: FAC-203" required style="height:36px; font-size:12px; border-radius:8px;">
+              </div>
+              <div>
+                <label style="font-size:10px; font-weight:700; color:#64748b;">Valor Gasto Factura ($)</label>
+                <input type="number" name="total_amount" class="form-input" placeholder="$ 0" required style="height:36px; font-size:12px; border-radius:8px;">
+              </div>
+              <div style="grid-column:span 2; display:flex; gap:10px; align-items:flex-end; margin-top:5px;">
+                <div style="flex:1;">
+                  <label style="font-size:10px; font-weight:700; color:#64748b;">Fecha Factura</label>
+                  <input type="date" name="date" class="form-input" value="${new Date().toISOString().split('T')[0]}" required style="height:36px; font-size:12px; border-radius:8px;">
+                </div>
+                <button class="btn-primary" style="height:36px; font-size:12px; padding:0 20px; background:#0f172a; border-radius:8px;">+ REGISTRAR</button>
+              </div>
+            </form>
+          </div>
+
+          <!-- SECCIÓN 2: GENERADOR DE PDF -->
+          <div style="display:flex; gap:10px; background:rgba(13,148,136,0.05); border:1px solid rgba(13,148,136,0.1); padding:15px; border-radius:12px; margin-bottom:25px; align-items:center; flex-wrap:wrap;">
+            <div style="flex:1; min-width:120px;">
+              <label style="font-size:10px; font-weight:700; color:#0d9488; display:block; margin-bottom:4px;">PDF Desde:</label>
+              <input type="date" id="pdf-start-date" class="form-input" style="height:34px; font-size:12px; border-color:rgba(13,148,136,0.3); border-radius:8px;">
+            </div>
+            <div style="flex:1; min-width:120px;">
+              <label style="font-size:10px; font-weight:700; color:#0d9488; display:block; margin-bottom:4px;">PDF Hasta:</label>
+              <input type="date" id="pdf-end-date" class="form-input" style="height:34px; font-size:12px; border-color:rgba(13,148,136,0.3); border-radius:8px;" value="${new Date().toISOString().split('T')[0]}">
+            </div>
+            <button onclick="window.generateSupplierPdf()" class="btn-primary" style="background:#0d9488; height:34px; font-size:11px; font-weight:800; padding:0 15px; margin-top:15px; display:flex; align-items:center; gap:5px; border-radius:8px;"><i data-lucide="file-text" style="width:14px;"></i> GENERAR PDF</button>
+          </div>
+
+          <!-- LISTADO DETALLADO DE FACTURAS -->
+          <h3 style="font-size:14px; font-weight:800; color:#475569; border-bottom:2px solid #f1f5f9; padding-bottom:8px; margin-bottom:15px; text-transform:uppercase; letter-spacing:0.5px;">Listado de Facturas (Track Record)</h3>
+          <div style="display:flex; flex-direction:column; gap:15px;">
+            ${invoices.length === 0 ? `
+              <div style="text-align:center; color:var(--text-muted); font-size:13px; padding:30px; background:#f8fafc; border-radius:12px; border:1px dashed #cbd5e1;">Sin facturas registradas para este proveedor todavía.</div>
+            ` : invoices.map(inv => {
+              const paid = (inv.payments || []).reduce((acc, p) => acc + p.amount, 0);
+              const debt = inv.total_amount - paid;
+              
+              return `
+              <div style="background:#ffffff; border:1px solid #e2e8f0; border-radius:16px; padding:16px; position:relative; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.02);">
+                <!-- Encabezado Factura -->
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                  <div>
+                    <span style="font-size:9px; font-weight:850; background:#f1f5f9; color:#64748b; padding:2px 8px; border-radius:20px; text-transform:uppercase; letter-spacing:0.5px;">Factura</span>
+                    <h4 style="margin:5px 0 2px; font-size:16px; font-weight:900; color:#1e293b;"># ${inv.invoice_number}</h4>
+                    <p style="margin:0; font-size:11px; color:#94a3b8; font-weight:700;">📅 Fecha: ${inv.date}</p>
+                  </div>
+                  <div style="text-align:right; display:flex; flex-direction:column; align-items:flex-end; gap:4px;">
+                    <button onclick="window.deleteSupplierInvoice('${inv.id}')" class="icon-btn" style="background:rgba(239,68,68,0.1); color:#ef4444; width:24px; height:24px; border-radius:6px;" title="Eliminar Registro"><i data-lucide="trash-2" style="width:12px;"></i></button>
+                    <h4 style="margin:5px 0 0; font-size:16px; font-weight:800; color:#0f172a;">${formatCurrency(inv.total_amount)}</h4>
+                  </div>
+                </div>
+
+                <!-- Abonos Grid -->
+                ${(inv.payments || []).length > 0 ? `
+                  <div style="background:#f8fafc; border-radius:10px; padding:8px 12px; margin-top:12px; border:1px solid #f1f5f9;">
+                    <p style="font-size:9px; font-weight:800; color:#94a3b8; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px;">Abonos Realizados:</p>
+                    ${inv.payments.map(p => `
+                      <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:4px; color:#475569; font-weight:700;">
+                        <span>↳ ${p.date}</span>
+                        <span style="color:#10b981;">+ ${formatCurrency(p.amount)}</span>
+                      </div>
+                    `).join('')}
+                  </div>
+                ` : ''}
+
+                <!-- Balance & Abono Form -->
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:15px; padding-top:12px; border-top:1px dashed #e2e8f0; flex-wrap:wrap; gap:10px;">
+                  <div>
+                    <p style="font-size:9px; color:#94a3b8; font-weight:800; text-transform:uppercase; margin:0; letter-spacing:0.5px;">Saldo Deudor Actual:</p>
+                    <p style="font-size:16px; font-weight:900; margin:2px 0 0; color:${debt > 0 ? 'var(--danger)' : '#10b981'};">${debt > 0 ? formatCurrency(debt) : '✅ COMPLETADO'}</p>
+                  </div>
+                  
+                  ${debt > 0 ? `
+                    <form onsubmit="window.saveInvoicePayment(event, '${inv.id}')" style="display:flex; gap:6px; align-items:center; flex-wrap:nowrap;">
+                      <input type="number" name="payment_amount" class="form-input" placeholder="$ Abonar" required style="height:32px; font-size:11px; width:95px; padding:0 8px; border-color:#cbd5e1; border-radius:8px;">
+                      <button class="btn-primary" style="height:32px; font-size:10px; font-weight:800; padding:0 12px; background:#10b981; border-radius:8px; text-transform:uppercase; letter-spacing:0.5px;">Abonar</button>
+                    </form>
+                  ` : ''}
+                </div>
+              </div>
+              `;
+            }).join('')}
+          </div>
+          
+          <div style="margin-top:30px;">
+            <button onclick="state.activeModal=null;render()" class="btn-primary" style="width:100%; background:#64748b; border-radius:12px; height:45px; font-weight:800;">CERRAR PANEL</button>
+          </div>
+        </div>
+      </div>
+      `;
+    })() : ''}
     
     ${state.activeModal === 'new_business' ? `
     <div class="modal-overlay">
@@ -3222,18 +3358,227 @@ window.handleSupplierSubmit = async (e) => {
   const debt = parseFloat(document.getElementById('sup-debt').value) || 0;
   const cash_purchases = parseFloat(document.getElementById('sup-cash').value) || 0;
 
-  const payload = { name, phone, products_sold, debt, cash_purchases };
-
   if (state.editingSupplier && state.editingSupplier.index !== undefined) {
-    state.suppliers[state.editingSupplier.index] = payload;
+    const currentSup = state.suppliers[state.editingSupplier.index];
+    state.suppliers[state.editingSupplier.index] = {
+      ...currentSup,
+      name, phone, products_sold, debt, cash_purchases
+    };
     state.editingSupplier = null;
   } else {
     state.suppliers = state.suppliers || [];
-    state.suppliers.push(payload);
+    state.suppliers.push({
+      name, phone, products_sold, debt, cash_purchases,
+      invoices: []
+    });
   }
 
   await window.saveSuppliers();
   render();
+};
+
+window.openSupplierLedger = (idx) => {
+  state.selectedSupplierIdx = idx;
+  state.activeModal = 'supplier_ledger';
+  render();
+};
+
+window.saveSupplierInvoice = async (e) => {
+  e.preventDefault();
+  const idx = state.selectedSupplierIdx;
+  const s = state.suppliers[idx];
+  if (!s) return;
+
+  const formData = new FormData(e.target);
+  const invoice_number = formData.get('invoice_number');
+  const total_amount = parseFloat(formData.get('total_amount')) || 0;
+  const date = formData.get('date') || new Date().toISOString().split('T')[0];
+
+  if (!invoice_number || total_amount <= 0) {
+    return window.showToast("🚫 Ingresa datos válidos de factura.", "danger");
+  }
+
+  s.invoices = s.invoices || [];
+  s.invoices.push({
+    id: Date.now().toString(),
+    invoice_number,
+    total_amount,
+    date,
+    payments: []
+  });
+
+  // Recalcular deudas para mantener consistencia
+  const totalInvoicesDebt = s.invoices.reduce((acc, inv) => {
+    const paid = (inv.payments || []).reduce((sum, p) => sum + p.amount, 0);
+    return acc + (inv.total_amount - paid);
+  }, 0);
+  
+  // Sumamos a la deuda inicial histórica
+  s.debt = totalInvoicesDebt;
+
+  await window.saveSuppliers();
+  render();
+};
+
+window.saveInvoicePayment = async (e, invoiceId) => {
+  e.preventDefault();
+  const idx = state.selectedSupplierIdx;
+  const s = state.suppliers[idx];
+  if (!s) return;
+
+  const inv = (s.invoices || []).find(i => i.id === invoiceId);
+  if (!inv) return;
+
+  const amountInput = e.target.querySelector('input[name="payment_amount"]');
+  const amount = parseFloat(amountInput.value) || 0;
+  const date = new Date().toISOString().split('T')[0];
+
+  const currentlyPaid = (inv.payments || []).reduce((sum, p) => sum + p.amount, 0);
+  const remaining = inv.total_amount - currentlyPaid;
+
+  if (amount <= 0 || amount > remaining) {
+    return window.showToast(`🚫 El monto debe ser mayor a 0 y no exceder el saldo pendiente (${formatCurrency(remaining)}).`, "warning");
+  }
+
+  inv.payments = inv.payments || [];
+  inv.payments.push({ date, amount });
+
+  // Recalcular deuda del proveedor
+  s.debt = s.invoices.reduce((acc, i) => {
+    const p = (i.payments || []).reduce((sum, pay) => sum + pay.amount, 0);
+    return acc + (i.total_amount - p);
+  }, 0);
+
+  await window.saveSuppliers();
+  render();
+};
+
+window.deleteSupplierInvoice = async (invoiceId) => {
+  if (!confirm("⚠️ ¿Estás seguro de eliminar este registro de factura? Esto borrará también todos sus abonos asociados.")) return;
+  const idx = state.selectedSupplierIdx;
+  const s = state.suppliers[idx];
+  if (!s) return;
+
+  s.invoices = (s.invoices || []).filter(i => i.id !== invoiceId);
+
+  // Recalcular deuda
+  s.debt = s.invoices.reduce((acc, i) => {
+    const p = (i.payments || []).reduce((sum, pay) => sum + pay.amount, 0);
+    return acc + (i.total_amount - p);
+  }, 0);
+
+  await window.saveSuppliers();
+  render();
+};
+
+window.generateSupplierPdf = () => {
+  const idx = state.selectedSupplierIdx;
+  const s = state.suppliers[idx];
+  if (!s) return;
+
+  const startDate = document.getElementById('pdf-start-date')?.value;
+  const endDate = document.getElementById('pdf-end-date')?.value;
+
+  let filteredInvoices = s.invoices || [];
+  if (startDate) filteredInvoices = filteredInvoices.filter(inv => inv.date >= startDate);
+  if (endDate) filteredInvoices = filteredInvoices.filter(inv => inv.date <= endDate);
+
+  const printWindow = window.open('', '_blank');
+  
+  let tableRows = filteredInvoices.map(inv => {
+    const totalPaid = (inv.payments || []).reduce((sum, p) => sum + p.amount, 0);
+    const currentDebt = inv.total_amount - totalPaid;
+    
+    let abonosText = (inv.payments || []).map(p => 
+      `<div style="font-size:11px; color:#64748b; padding-left:20px;">↳ Abono: ${p.date} - <b>${formatCurrency(p.amount)}</b></div>`
+    ).join('');
+    
+    return `
+      <tr style="border-bottom: 1px solid #e2e8f0;">
+        <td style="padding:12px;">
+          <div style="font-weight:bold; color:#1e293b;"># ${inv.invoice_number}</div>
+          <div style="font-size:11px; color:#94a3b8;">Fecha Compra: ${inv.date}</div>
+          ${abonosText}
+        </td>
+        <td style="padding:12px; text-align:right; font-weight:600;">${formatCurrency(inv.total_amount)}</td>
+        <td style="padding:12px; text-align:right; font-weight:600; color:#10b981;">${formatCurrency(totalPaid)}</td>
+        <td style="padding:12px; text-align:right; font-weight:700; color:#ef4444;">${formatCurrency(currentDebt)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const overallDebt = filteredInvoices.reduce((acc, inv) => {
+    const paid = (inv.payments || []).reduce((sum, p) => sum + p.amount, 0);
+    return acc + (inv.total_amount - paid);
+  }, 0);
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Reporte de Proveedor - ${s.name}</title>
+      <style>
+        body { font-family: 'Inter', system-ui, sans-serif; color: #334155; padding: 30px; margin: 0; }
+        .header { border-bottom: 3px solid #0f172a; padding-bottom: 15px; margin-bottom: 25px; }
+        .header h1 { margin: 0; font-size: 22px; color: #0f172a; }
+        .header p { margin: 5px 0 0; font-size: 13px; color: #64748b; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 25px; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #f1f5f9; }
+        .grid p { margin: 5px 0; font-size: 13px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th { background: #0f172a; color: white; text-align: left; padding: 10px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+        td { border-bottom: 1px solid #e2e8f0; }
+        .summary-box { margin-top: 30px; background: #fff5f5; border: 1px solid #feb2b2; padding: 15px; border-radius: 8px; text-align: right; }
+        .summary-box h2 { margin: 0; color: #c53030; font-size: 18px; }
+        @media print {
+          body { padding: 10px; }
+          .no-print { display: none; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>SURTIHOGAR G&C - REPORTE CONTABLE</h1>
+        <p>Auditoría y Estado de Cuentas por Proveedor</p>
+      </div>
+      <div class="grid">
+        <div>
+          <p><strong>Proveedor:</strong> ${s.name}</p>
+          <p><strong>Teléfono:</strong> ${s.phone || 'Sin registrar'}</p>
+        </div>
+        <div style="text-align:right;">
+          <p><strong>Fecha Emisión:</strong> ${new Date().toLocaleString()}</p>
+          <p><strong>Periodo del Reporte:</strong> ${startDate || 'Histórico Completo'} al ${endDate || 'Hoy'}</p>
+        </div>
+      </div>
+      
+      <h3>Historial de Facturas y Movimientos</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Detalle / Abonos</th>
+            <th style="text-align:right;">Gasto Total</th>
+            <th style="text-align:right;">Abonado</th>
+            <th style="text-align:right;">Saldo Deuda</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${tableRows || '<tr><td colspan="4" style="padding:30px; text-align:center; color:#94a3b8;">Sin registros en este rango de fechas.</td></tr>'}
+        </tbody>
+      </table>
+
+      <div class="summary-box">
+        <h2>DEUDA TOTAL CONSOLIDADA: ${formatCurrency(overallDebt)}</h2>
+      </div>
+
+      <script>
+        window.onload = function() {
+          setTimeout(() => { window.print(); window.close(); }, 500);
+        }
+      </script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
 };
 
 window.fetchSuppliers = async () => {
