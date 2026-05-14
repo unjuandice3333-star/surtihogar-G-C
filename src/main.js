@@ -1811,7 +1811,6 @@ const render = () => {
                     <span style="font-size:9px; font-weight:800; color:${e.can_manage_inventory ? 'var(--success)' : 'var(--text-muted)'};">INVENTARIO</span>
                     <input type="checkbox" onchange="window.toggleInventoryPermission('${e.id}', ${e.can_manage_inventory})" ${e.can_manage_inventory ? 'checked' : ''}>
                   </label>
-                  <button onclick="window.openModal('shift', null, '${e.id}')" class="btn-primary" style="padding:8px 16px; font-size:11px;">AGENDAR</button>
                 </div>
               </div>
             `).join('')}
@@ -3117,7 +3116,10 @@ const render = () => {
             <label>Negocio (Operativo)</label>
             <select name="business" class="form-input" required>
               <option value="">Selecciona negocio operativo...</option>
-              ${state.businesses.filter(b => b.type === 'operativo').map(b => `<option value="${b.id}" ${state.editingShift?.business_id === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+              ${state.businesses.filter(b => b.type === 'operativo').map(b => {
+                const isSelected = state.editingShift?.business_id === b.id || (!state.editingShift && state.employees.find(emp => emp.id === state.selectedUserId)?.business_id === b.id);
+                return `<option value="${b.id}" ${isSelected ? 'selected' : ''}>${b.name}</option>`;
+              }).join('')}
             </select>
           </div>
           <div class="form-group">
