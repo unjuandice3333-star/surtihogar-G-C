@@ -1791,10 +1791,6 @@ const render = () => {
                 <div style="flex:1;">
                   <p style="font-weight:700; font-size:15px;">${e.name}</p>
                   <div style="margin-top:5px; display:flex; gap:10px;">
-                      <select onchange="window.updateUserBusiness('${e.id}', this.value)" style="font-size:11px; padding:4px 8px; border-radius:8px; border:1px solid #e2e8f0; background:white; color:var(--text); width:100%; max-width:180px;">
-                        <option value="">ðŸ“ Seleccionar Local...</option>
-                        ${state.businesses.map(b => `<option value="${b.id}" ${e.business_id === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
-                      </select>
                       <div style="display:flex; align-items:center; gap:5px; background:white; border:1px solid #e2e8f0; border-radius:8px; padding:0 8px;">
                         <span style="font-size:10px; font-weight:800; color:var(--text-muted);">$</span>
                         <input type="number" value="${e.hourly_rate || 0}" onchange="window.updateUserHourlyRate('${e.id}', this.value)" style="border:none; width:60px; font-size:11px; font-weight:700; outline:none;" title="Valor Hora">
