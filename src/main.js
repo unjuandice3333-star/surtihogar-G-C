@@ -2650,7 +2650,8 @@ const render = () => {
                   </div>
                   <div>
                     <h4 style="margin:0;">${t.categories?.name || (t.type==='income'?'Venta':'Gasto')}</h4>
-                    <p style="margin:0; font-size:11px; color:var(--text-muted);">${new Date(t.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
+                    ${t.description ? `<p style="margin:2px 0 0 0; font-size:12px; color:#475569; font-weight:700;">📝 ${t.description}</p>` : ''}
+                    <p style="margin:2px 0 0 0; font-size:11px; color:var(--text-muted);">${new Date(t.date).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</p>
                   </div>
                 </div>
                 <div style="font-weight:800; color:${t.type==='income'?'var(--success)':'var(--danger)'}">
@@ -2732,6 +2733,10 @@ const render = () => {
             `}
             <div class="form-group"><label>Monto</label><input type="number" name="amount" class="form-input" placeholder="$ 0" required></div>
             ${state.activeModal === 'expense' ? `
+              <div class="form-group">
+                <label>Descripción / Motivo</label>
+                <input type="text" name="description" class="form-input" placeholder="Ej: Compra de café, Pago de luz, Flete..." required>
+              </div>
               <div class="form-group">
                 <label>Foto de Comprobante</label>
                 <input type="file" name="photo" class="form-input" accept="image/*" capture="environment" style="padding:10px;">
@@ -3402,6 +3407,7 @@ window.saveExpense = async (e) => {
     const formData = new FormData(e.target);
     const rawAmount = formData.get('amount');
     const categoryId = formData.get('category');
+    const description = formData.get('description') || '';
     const businessId = formData.get('business') || state.activeShiftBusinessId;
 
     // Sanitización Profesional del Monto
@@ -3435,6 +3441,7 @@ window.saveExpense = async (e) => {
       category_id: categoryId,
       user_id: state.user.id,
       date: new Date().toISOString(),
+      description: description,
       note: photoUrl ? `[CON COMPROBANTE: ${photoUrl}]` : null
     });
 
