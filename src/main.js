@@ -87,7 +87,7 @@ window.fetchData = async () => {
         supabase.from('shifts').select('*, businesses(name)').order('start_time', { ascending: false }),
         supabase.from('users').select('*').neq('role', 'admin'),
         supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(200),
-        supabase.from('sale_items').select('*, products(name, business_id)'),
+        supabase.from('sale_items').select('*, products(name, business_id, cost)'),
         supabase.from('pending_products').select('*').order('created_at', { ascending: false }),
         SupplierService.loadAll(state.user.id)
       ]);
@@ -3814,6 +3814,7 @@ window.generateAdminSalesReportPDF = async () => {
     const head = [['REF / FECHA', 'SEDE', 'VENDEDOR', 'DETALLE DE PRODUCTOS Y CANTIDADES', 'PAGO', 'TOTAL NETO']];
     const body = [];
     let totalRevenue = 0;
+    let totalCost = 0;
     let totalUnits = 0;
 
     filteredSales.forEach(sale => {
@@ -3833,24 +3834,44 @@ window.generateAdminSalesReportPDF = async () => {
       // Forma de Pago
       const payMethod = sale.payment_method || 'Efectivo';
 
-      // Detalle textual concatenado de productos
+      // Detalle textual concatenado de productos con recopilación de costos históricos
       const productsLabel = items.map(i => {
+        // Prioridad 1: Relación cargada en RAM. Prioridad 2: Lookup directo en inventario
         let pName = i.products?.name;
+        let pCost = parseFloat(i.products?.cost) || 0;
+
+        if (!pName) {
+          const linkedProd = state.products.find(p => p.id === i.product_id);
+          if (linkedProd) {
+            pName = linkedProd.name;
+            pCost = parseFloat(linkedProd.cost) || 0;
+          }
+        }
+
+        // Fallbacks de nombres y costos
         if (!pName) {
           const pending = state.pendingProducts.find(pp => pp.sale_id === sale.id);
           if (pending) {
-            pName = `${pending.name} (Pendiente Formalizar)`;
+            pName = `${pending.name} (Pte.)`;
+            pCost = parseFloat(pending.cost) || 0;
           } else if (sale.note && sale.note.includes('Venta informal')) {
             pName = sale.note.replace('Venta informal: ', '');
+            pCost = 0; // Ventas directas informales asumen costo base 0 por defecto
           } else {
             pName = 'Producto Especial';
+            pCost = 0;
           }
         }
-        totalUnits += Number(i.quantity);
-        return `${pName} [x${i.quantity}]`;
+
+        const itemQty = Number(i.quantity) || 1;
+        totalUnits += itemQty;
+        totalCost += (pCost * itemQty);
+
+        return `${pName} [x${itemQty}]`;
       }).join(', ');
 
-      const saleTotal = parseFloat(sale.total_amount) || 0;
+      // CORRECCIÓN CRÍTICA: Usar 'sale.total' en vez de 'total_amount'
+      const saleTotal = parseFloat(sale.total) || 0;
       totalRevenue += saleTotal;
 
       const dateObj = new Date(sale.created_at);
@@ -3884,29 +3905,59 @@ window.generateAdminSalesReportPDF = async () => {
       }
     });
 
-    // 📊 RESUMEN DE TOTALIZACIÓN (CAJA DE PIE DE PÁGINA)
+    // 📊 RESUMEN FINANCIERO Y MARGEN DE UTILIDAD (PIE DE PÁGINA EXPANDIDO)
     const finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 100) + 15;
     
-    // Validar si el cuadro de totales cabe en la página actual
-    if (finalY > 180) {
+    // Validar si el cuadro de totales ampliado cabe en la página actual
+    if (finalY > 155) {
       doc.addPage();
       doc.setPage(doc.getNumberOfPages());
     }
 
-    const rectY = finalY > 180 ? 20 : finalY;
+    const rectY = finalY > 155 ? 20 : finalY;
 
-    doc.setFillColor(240, 253, 250); // Fondo turquesa ultra suave
+    // Cálculos de Rentabilidad
+    const netProfit = totalRevenue - totalCost;
+    const profitMarginPct = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100) : 0;
+
+    // Dibujar contenedor estilizado
+    doc.setFillColor(240, 253, 250); // Fondo turquesa suave
     doc.setDrawColor(45, 212, 191); // Borde turquesa
-    doc.rect(170, rectY - 8, 112, 26, 'FD');
+    doc.rect(170, rectY - 8, 112, 45, 'FD'); // Alto incrementado a 45 para meter los 5 indicadores
     
     doc.setFont("helvetica", "bold");
     doc.setTextColor(13, 148, 136);
-    doc.setFontSize(9.5);
-    doc.text(`PRODUCTOS VENDIDOS:  ${totalUnits} unidades`, 175, rectY);
+    doc.setFontSize(9);
     
-    doc.setFontSize(11.5);
+    doc.text(`PRODUCTOS VENDIDOS:`, 175, rectY);
+    doc.setFont("helvetica", "normal");
+    doc.text(`${totalUnits} unidades`, 235, rectY);
+
+    doc.setFont("helvetica", "bold");
+    doc.text(`INGRESOS TOTALES:`, 175, rectY + 8);
+    doc.setFont("helvetica", "normal");
+    doc.text(`${formatCurrency(totalRevenue)}`, 235, rectY + 8);
+
+    doc.setFont("helvetica", "bold");
+    doc.text(`COSTOS TOTALES:`, 175, rectY + 16);
+    doc.setFont("helvetica", "normal");
+    doc.text(`${formatCurrency(totalCost)}`, 235, rectY + 16);
+
+    // Línea sutil de balance interno
+    doc.setDrawColor(153, 246, 228);
+    doc.line(175, rectY + 21, 277, rectY + 21);
+
+    // Resultados netos destacados
+    doc.setFont("helvetica", "bold");
     doc.setTextColor(15, 23, 42);
-    doc.text(`INGRESOS TOTALES:    ${formatCurrency(totalRevenue)}`, 175, rectY + 10);
+    doc.setFontSize(10.5);
+    
+    doc.text(`UTILIDAD NETA:`, 175, rectY + 27);
+    doc.text(`${formatCurrency(netProfit)}`, 235, rectY + 27);
+
+    doc.setTextColor(13, 148, 136); // Volver a tono turquesa fuerte para el porcentaje
+    doc.text(`MARGEN BRUTO:`, 175, rectY + 33);
+    doc.text(`${profitMarginPct.toFixed(2)}%`, 235, rectY + 33);
 
     // 🚀 BÚNKER DE DESPACHO INDESTRUCTIBLE (NATIVO -> COMPARTIR -> DESCARGA)
     const rawBlob = doc.output('blob');
