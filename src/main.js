@@ -50,12 +50,14 @@ window.fetchData = async () => {
   try {
     state.loading = true;
     
-    // 1. Cargar Negocios (con datos de geocerca)
-    const { data: busRes } = await supabase.from('businesses').select('id, name, type, lat, lng, geofence_radius_meters');
+    // 1. Garantizar que la sesión se restablezca en el cliente Supabase antes de cualquier consulta
+    const { data: { session } } = await supabase.auth.getSession();
+    
+    // 2. Cargar Negocios (con datos de geocerca) - Ahora con JWT autenticado disponible si hay sesión
+    const { data: busRes, error: busErr } = await supabase.from('businesses').select('id, name, type, lat, lng, geofence_radius_meters');
+    if (busErr) console.warn("Aviso cargando negocios:", busErr.message);
     state.businesses = busRes || [];
 
-    // 2. Verificar Sesión
-    const { data: { session } } = await supabase.auth.getSession();
     if (!session) { 
       if (state.view !== 'register') state.view = 'auth'; 
       state.loading = false;
