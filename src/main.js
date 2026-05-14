@@ -4,8 +4,8 @@ import { SupplierService } from './services/SupplierService'
 import { DatabaseService } from './services/DatabaseService'
 import { byodService } from './services/ByodComplianceService'
 import { Geolocation } from '@capacitor/geolocation'
-import jsPDF from 'jspdf'
-import 'jspdf-autotable'
+import { jsPDF } from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 // Centralización de Filtros (Mejores Prácticas DRY)
 const RENTAL_BUSINESSES = ['Billar', 'Droguería', 'Local ropa', 'Restaurante'];
@@ -3557,7 +3557,7 @@ window.generateSupplierPdf = async () => {
       body.push([{ content: 'Sin movimientos financieros registrados en este periodo.', colSpan: 4, styles: { halign: 'center', textColor: [100,116,139] } }]);
     }
 
-    doc.autoTable({
+    autoTable(doc, {
       startY: 78,
       head: head,
       body: body,
@@ -3573,7 +3573,7 @@ window.generateSupplierPdf = async () => {
     });
     
     // Cuadro Resumen de Deuda Total
-    const finalY = doc.lastAutoTable.finalY + 15;
+    const finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 120) + 15;
     
     // Verificar desbordamiento de página para el cuadro de deuda
     if (finalY > 270) {
