@@ -3600,23 +3600,55 @@ window.generateSupplierPdf = async () => {
     const safeName = `Reporte_${s.name.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
     const shareFile = new File([rawBlob], safeName, { type: 'application/pdf' });
     
-    // Evaluar capacidad de compartir en Web/Capacitor nativo
-    if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
-      await navigator.share({
-        files: [shareFile],
-        title: `Reporte Contable - ${s.name}`,
-        text: `Adjuntamos reporte contable con corte a la fecha.`
-      });
-      window.showToast("✅ Reporte compartido con éxito.", "success");
-    } else {
-      // Caída controlada: Descargar archivo binario
-      doc.save(safeName);
-      window.showToast("✅ PDF descargado en la carpeta de Descargas.", "success");
+    // SECUENCIACIÓN BLINDADA DE DESPACHO (Compartir -> Descarga Local -> Blob URL)
+    let isCompleted = false;
+
+    // 1. Intentar compartir nativamente (Android/Capacitor)
+    if (navigator.share && navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+      try {
+        await navigator.share({
+          files: [shareFile],
+          title: `Reporte Contable - ${s.name}`,
+          text: `Adjuntamos reporte contable con corte a la fecha.`
+        });
+        isCompleted = true;
+        window.showToast("✅ Reporte enviado con éxito.", "success");
+      } catch (shareErr) {
+        console.warn("El menú de compartir falló o fue cancelado, procediendo a descarga local:", shareErr);
+      }
+    }
+
+    // 2. Si no se compartió, intentar guardar archivo físicamente (doc.save)
+    if (!isCompleted) {
+      try {
+        doc.save(safeName);
+        isCompleted = true;
+        window.showToast("✅ PDF guardado en tu carpeta de Descargas.", "success");
+      } catch (saveErr) {
+        console.error("Error fatal en doc.save():", saveErr);
+      }
+    }
+
+    // 3. Fallback Extremo (Si todo lo anterior falla en WebViews restringidas)
+    if (!isCompleted) {
+      try {
+        const blobUrl = URL.createObjectURL(rawBlob);
+        const tempLink = document.createElement('a');
+        tempLink.href = blobUrl;
+        tempLink.download = safeName;
+        document.body.appendChild(tempLink);
+        tempLink.click();
+        document.body.removeChild(tempLink);
+        window.showToast("✅ Descarga forzada iniciada.", "success");
+      } catch (fallbackErr) {
+        console.error("Error en fallback extremo de descarga:", fallbackErr);
+        window.showToast("❌ El dispositivo bloqueó la descarga. Revisa permisos.", "danger");
+      }
     }
 
   } catch (err) {
-    console.error("Error al sintetizar reporte PDF:", err);
-    window.showToast("❌ Error inesperado al generar el documento.", "danger");
+    console.error("Error absoluto al sintetizar reporte PDF:", err);
+    window.showToast("❌ Error crítico inesperado al generar el documento.", "danger");
   }
 };
 
