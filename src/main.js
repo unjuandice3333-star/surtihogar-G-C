@@ -319,6 +319,59 @@ window.openModal = async (type, shiftId = null, userId = null, date = null) => {
   }, 50);
 };
 
+window.saveSurtihogarSale = async (e) => {
+  e.preventDefault();
+  const btn = e.submitter || e.target.querySelector('button[type="submit"]');
+  const originalHtml = btn.innerHTML;
+  try {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> PROCESANDO...';
+    
+    const form = new FormData(e.target);
+    const desc = form.get('description');
+    const amount = parseFloat(form.get('amount'));
+    const pm = form.get('payment_method');
+    const bizId = state.activeShiftBusinessId || state.currentBusinessId;
+    
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) throw new Error("Sesión inválida.");
+
+    // Encontrar categoría de ingreso por ventas
+    const cat = state.categories.find(c => c.name === 'Venta' && c.type === 'income');
+    
+    // 1. Guardar la venta matriz (Total y nota especial para ser interpretada en los reportes y PDF)
+    const { data: sale, error: saleErr } = await supabase.from('sales').insert({
+      user_id: state.user.id,
+      total: amount,
+      payment_method: pm,
+      note: 'Venta informal: ' + desc
+    }).select().single();
+    if (saleErr) throw saleErr;
+    
+    // 2. Guardar el movimiento financiero (Caja)
+    const { error: trxErr } = await supabase.from('transactions').insert({
+      amount: amount,
+      type: 'income',
+      description: desc,
+      category_id: cat ? cat.id : null,
+      business_id: bizId,
+      user_id: state.user.id,
+      payment_method: pm
+    });
+    if (trxErr) throw trxErr;
+    
+    window.showToast('✅ Venta registrada exitosamente', 'success');
+    state.activeModal = null;
+    await window.fetchData();
+  } catch (err) {
+    console.error(err);
+    window.showToast('❌ Error: ' + err.message, 'danger');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = originalHtml; }
+    render();
+  }
+};
+
 window.saveTransaction = async (e, type) => {
   e.preventDefault();
   const btn = e.submitter || e.target.querySelector('button[type="submit"]') || e.target.querySelector('button');
@@ -693,6 +746,9 @@ const render = () => {
     );
     const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
+    const activeBiz = state.businesses.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
+    const isSurtihogar = activeBiz && activeBiz.name.toLowerCase().includes('surtihogar');
+
     html = `
       <header class="main-header">
         <div class="logo-container">
@@ -722,6 +778,25 @@ const render = () => {
         </style>
         
         <!-- PRODUCTOS -->
+        ${isSurtihogar ? `
+          <div style="flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; background:white; border-radius:20px; box-shadow:0 4px 6px rgba(0,0,0,0.05); padding:40px;">
+            <div style="width:100px; height:100px; background:#f1f5f9; border-radius:50%; display:flex; align-items:center; justify-content:center; margin-bottom:20px;">
+              <i data-lucide="shopping-bag" style="width:50px; height:50px; color:var(--primary);"></i>
+            </div>
+            <h2 style="font-size:28px; margin-bottom:10px; color:var(--text);">Punto de Venta Surtihogar</h2>
+            <p style="color:var(--text-muted); margin-bottom:40px; text-align:center; max-width:400px;">Registra las ventas directas con una breve descripción y el precio final.</p>
+            
+            ${(!state.activeShiftBusinessId && state.user?.role !== 'admin') ? `
+              <div style="background:#fee2e2; color:#991b1b; padding:15px 25px; border-radius:12px; font-weight:700; margin-bottom:20px; font-size:16px;">
+                ⚠️ TURNO INACTIVO: Registra tu llegada para habilitar ventas.
+              </div>
+            ` : `
+              <button onclick="state.activeModal='surtihogar_sale';render()" class="btn-primary" style="padding:25px 50px; font-size:20px; border-radius:16px; box-shadow:0 10px 25px rgba(59,130,246,0.3); transition:all 0.2s;">
+                + REGISTRAR VENTA
+              </button>
+            `}
+          </div>
+        ` : `
         <div class="pos-main">
           <div style="display:flex; gap:10px;">
             <div style="position:relative; flex:1;">
@@ -795,6 +870,7 @@ const render = () => {
             `}
           </div>
         </div>
+        `}
       </div>
     `;
   }
@@ -2715,6 +2791,43 @@ const render = () => {
 
   // 10. MODALES GLOBALES
   const modalHtml = `
+    ${state.activeModal === 'surtihogar_sale' ? `
+    <div class="modal-overlay">
+      <div class="modal-card card" style="max-width:450px;">
+        <div class="modal-close" onclick="state.activeModal=null;render()">✕</div>
+        <h2 style="text-align:center; margin-bottom:20px;">Registrar Venta Directa</h2>
+        ${state.user?.role !== 'admin' && !state.activeShiftBusinessId ? `
+          <div style="text-align:center; padding:40px 20px;">
+            <div style="font-size:50px; margin-bottom:20px;">🔒</div>
+            <h3 style="color:var(--danger); font-size:18px; margin-bottom:10px;">Acceso Bloqueado</h3>
+            <p style="color:#64748b; font-size:14px; line-height:1.6;">No tienes un turno activo asignado en este momento. Por favor, solicita a un administrador que te asigne un turno para poder registrar movimientos.</p>
+            <button onclick="state.activeModal=null;render()" class="btn-primary" style="margin-top:25px; background:#64748b;">ENTENDIDO</button>
+          </div>
+        ` : `
+          <form onsubmit="window.saveSurtihogarSale(event)">
+            <div class="form-group">
+              <label>Descripción / Producto vendido</label>
+              <input type="text" name="description" class="form-input" required placeholder="Ej: Licuadora oster">
+            </div>
+            <div class="form-group">
+              <label>Precio Final ($)</label>
+              <input type="number" name="amount" class="form-input" required placeholder="Ej: 50000" min="0" step="any">
+            </div>
+            <div class="form-group">
+              <label>Medio de Pago</label>
+              <select name="payment_method" class="form-input" required>
+                <option value="Efectivo">💵 Efectivo</option>
+                <option value="Addi">💳 Addi</option>
+                <option value="Sistecredito">💳 Sistecredito</option>
+                <option value="Transferencia">🏦 Transferencia</option>
+              </select>
+            </div>
+            <button type="submit" class="btn-primary" style="width:100%; padding:15px; margin-top:10px;">CONFIRMAR VENTA</button>
+          </form>
+        `}
+      </div>
+    </div>
+    ` : ''}
     ${state.activeModal === 'sale' || state.activeModal === 'expense' ? `
     <div class="modal-overlay">
       <div class="modal-card card" style="max-width:450px;">
