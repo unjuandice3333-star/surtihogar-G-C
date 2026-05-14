@@ -897,6 +897,39 @@ const render = () => {
           </div>
         </div>
 
+        <!-- 📊 CENTRO DE REPORTES Y AUDITORÍA PREMIUM (PDF) -->
+        <div class="card" style="margin-bottom:30px; padding:25px; background:linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color:white; border:none; border-radius:20px; box-shadow: 0 10px 30px rgba(15,23,42,0.15); position:relative; overflow:hidden;">
+          <div style="position:absolute; top:-10px; right:-10px; font-size:90px; opacity:0.03; font-weight:800; pointer-events:none; color:white;"><i data-lucide="file-text"></i></div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:15px; position:relative; z-index:1;">
+            <div>
+              <h3 style="font-size:18px; font-weight:800; display:flex; align-items:center; gap:8px; color:#38bdf8;"><i data-lucide="file-text" style="width:20px;"></i> Auditoría y Reportes PDF de Ventas</h3>
+              <p style="font-size:11px; color:#94a3b8; margin-top:2px;">Genera planillas oficiales detallando productos por local, vendedor y fechas.</p>
+            </div>
+            <button onclick="window.setTodayReportingRange()" class="btn-primary" style="background:#0369a1; font-size:12px; padding:8px 15px; border:none; border-radius:10px; display:flex; align-items:center; gap:5px; font-weight:700; transition:all 0.2s;"><i data-lucide="calendar" style="width:14px;"></i> REPORTAR HOY</button>
+          </div>
+          
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap:15px; align-items:end; position:relative; z-index:1;">
+            <div>
+              <label style="font-size:11px; font-weight:700; color:#94a3b8; display:block; margin-bottom:6px; text-transform:uppercase;">Seleccionar Local / Sede</label>
+              <select id="rpt-biz-select" style="width:100%; background:#1e293b; border:1.5px solid #334155; color:white; padding:10px 12px; border-radius:12px; font-size:12px; outline:none; transition:border 0.2s;">
+                <option value="all">--- Todos los Locales (Consolidado) ---</option>
+                ${state.businesses.map(b => `<option value="${b.id}">${b.name}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label style="font-size:11px; font-weight:700; color:#94a3b8; display:block; margin-bottom:6px; text-transform:uppercase;">Fecha Inicial</label>
+              <input type="date" id="rpt-start" value="${new Date().toISOString().split('T')[0]}" style="width:100%; background:#1e293b; border:1.5px solid #334155; color:white; padding:10px 12px; border-radius:12px; font-size:12px; outline:none;" />
+            </div>
+            <div>
+              <label style="font-size:11px; font-weight:700; color:#94a3b8; display:block; margin-bottom:6px; text-transform:uppercase;">Fecha Final</label>
+              <input type="date" id="rpt-end" value="${new Date().toISOString().split('T')[0]}" style="width:100%; background:#1e293b; border:1.5px solid #334155; color:white; padding:10px 12px; border-radius:12px; font-size:12px; outline:none;" />
+            </div>
+            <div>
+              <button onclick="window.generateAdminSalesReportPDF()" class="btn-primary" style="width:100%; background:#0284c7; padding:12px; border-radius:12px; font-size:13px; font-weight:800; display:flex; align-items:center; justify-content:center; gap:8px; border:none; box-shadow: 0 4px 12px rgba(2,132,199,0.3); transition:transform 0.2s;"><i data-lucide="download-cloud" style="width:16px;"></i> DESCARGAR PDF</button>
+            </div>
+          </div>
+        </div>
+
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:20px; margin-bottom:30px;">
           <button onclick="state.activeModal='sale';render()" class="btn-primary" style="padding:20px; background:var(--secondary); font-size:13px;">+ REGISTRAR VENTA</button>
           <button onclick="state.activeModal='expense';render()" class="btn-primary" style="padding:20px; font-size:13px;">+ REGISTRAR GASTO</button>
@@ -3686,6 +3719,266 @@ window.generateSupplierPdf = async () => {
   } catch (err) {
     console.error("Error absoluto al sintetizar reporte PDF:", err);
     window.showToast("❌ Error crítico inesperado al generar el documento.", "danger");
+  }
+};
+
+window.setTodayReportingRange = () => {
+  const today = new Date().toISOString().split('T')[0];
+  const sInput = document.getElementById('rpt-start');
+  const eInput = document.getElementById('rpt-end');
+  if (sInput) sInput.value = today;
+  if (eInput) eInput.value = today;
+  window.showToast("📅 Rango de fechas establecido para hoy.", "info");
+};
+
+window.generateAdminSalesReportPDF = async () => {
+  try {
+    const bizId = document.getElementById('rpt-biz-select')?.value || 'all';
+    const startVal = document.getElementById('rpt-start')?.value;
+    const endVal = document.getElementById('rpt-end')?.value;
+
+    if (!startVal || !endVal) {
+      return window.showToast("🚫 Por favor, selecciona ambas fechas para procesar.", "warning");
+    }
+
+    window.showToast("⏳ Iniciando compilación de auditoría...", "info");
+
+    // 📅 Extracción segura de límites temporales (Día completo en hora local)
+    const startMs = new Date(startVal + 'T00:00:00').getTime();
+    const endMs = new Date(endVal + 'T23:59:59').getTime();
+
+    let filteredSales = state.sales.filter(sale => {
+      const saleTime = new Date(sale.created_at).getTime();
+      return saleTime >= startMs && saleTime <= endMs;
+    });
+
+    // 🏢 Filtrar ventas por pertenencia a la sede seleccionada
+    if (bizId !== 'all') {
+      filteredSales = filteredSales.filter(sale => {
+        const items = state.saleItems.filter(si => si.sale_id === sale.id);
+        const bizIdsFromProducts = items.map(i => i.products?.business_id).filter(Boolean);
+        const saleShortId = sale.id.slice(0, 5);
+        const bizIdsFromTransactions = state.transactions
+          .filter(t => t.note && t.note.includes(saleShortId))
+          .map(t => t.business_id);
+        const allBizIds = [...new Set([...bizIdsFromProducts, ...bizIdsFromTransactions])];
+        return allBizIds.includes(bizId);
+      });
+    }
+
+    if (filteredSales.length === 0) {
+      return window.showToast("ℹ️ No se registraron ventas en este rango de fechas.", "warning");
+    }
+
+    // Crear documento en formato apaisado (LANDSCAPE) para dar espacio a los detalles
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+    // 🖌️ CABECERA ADMINISTRATIVA VECTORIAL (Estilo Premium Oscuro)
+    doc.setFillColor(15, 23, 42);
+    doc.rect(0, 0, 297, 32, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text("SURTIHOGAR G&C - REPORTE OFICIAL DE AUDITORÍA DE VENTAS", 15, 15);
+    
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(148, 163, 184);
+    doc.text("Módulo Administrativo de Inteligencia Comercial • Registro Detallado de Movimientos POS", 15, 23);
+
+    // 🏷️ RESOLUCIÓN DE CRITERIOS DE EMISIÓN
+    const bizName = bizId === 'all' ? 'Consolidado (Todos los Locales)' : (state.businesses.find(b => b.id === bizId)?.name || 'Local Seleccionado');
+    
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("DETALLE DEL REPORTE", 15, 45);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`Local / Sede: ${bizName}`, 15, 51);
+    doc.text(`Periodo Solicitado: ${startVal} al ${endVal}`, 15, 57);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("AUDITORÍA DE SISTEMA", 180, 45);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generado por: ${state.user?.name || 'Administrador Global'}`, 180, 51);
+    doc.text(`Fecha de Emisión: ${new Date().toLocaleString('es-CO')}`, 180, 57);
+
+    // Línea divisoria elegante
+    doc.setDrawColor(226, 232, 240);
+    doc.line(15, 65, 282, 65);
+
+    // 📊 CONSTRUCCIÓN DEL CUERPO DE LA TABLA
+    const head = [['REF / FECHA', 'SEDE', 'VENDEDOR', 'DETALLE DE PRODUCTOS Y CANTIDADES', 'PAGO', 'TOTAL NETO']];
+    const body = [];
+    let totalRevenue = 0;
+    let totalUnits = 0;
+
+    filteredSales.forEach(sale => {
+      const items = state.saleItems.filter(si => si.sale_id === sale.id);
+      
+      // Obtención del nombre de las sedes involucradas
+      const bizIdsFromProducts = items.map(i => i.products?.business_id).filter(Boolean);
+      const saleShortId = sale.id.slice(0, 5);
+      const bizIdsFromTransactions = state.transactions.filter(t => t.note && t.note.includes(saleShortId)).map(t => t.business_id);
+      const allBizIds = [...new Set([...bizIdsFromProducts, ...bizIdsFromTransactions])];
+      const bizNames = allBizIds.map(id => state.businesses.find(b => b.id === id)?.name || 'General').join(', ');
+
+      // Vendedor
+      const sellerObj = state.employees?.find(emp => emp.id === sale.user_id) || (state.user?.id === sale.user_id ? state.user : null);
+      const sellerName = sellerObj?.name || 'Asignado';
+
+      // Forma de Pago
+      const payMethod = sale.payment_method || 'Efectivo';
+
+      // Detalle textual concatenado de productos
+      const productsLabel = items.map(i => {
+        let pName = i.products?.name;
+        if (!pName) {
+          const pending = state.pendingProducts.find(pp => pp.sale_id === sale.id);
+          if (pending) {
+            pName = `${pending.name} (Pendiente Formalizar)`;
+          } else if (sale.note && sale.note.includes('Venta informal')) {
+            pName = sale.note.replace('Venta informal: ', '');
+          } else {
+            pName = 'Producto Especial';
+          }
+        }
+        totalUnits += Number(i.quantity);
+        return `${pName} [x${i.quantity}]`;
+      }).join(', ');
+
+      const saleTotal = parseFloat(sale.total_amount) || 0;
+      totalRevenue += saleTotal;
+
+      const dateObj = new Date(sale.created_at);
+      const dateStr = `${dateObj.getDate().toString().padStart(2,'0')}/${(dateObj.getMonth()+1).toString().padStart(2,'0')} ${dateObj.getHours().toString().padStart(2,'0')}:${dateObj.getMinutes().toString().padStart(2,'0')}`;
+
+      body.push([
+        `#${sale.id.slice(0, 8).toUpperCase()}\n${dateStr}`,
+        bizNames || 'Surtihogar',
+        sellerName,
+        productsLabel || 'Venta directa en POS',
+        payMethod.toUpperCase(),
+        formatCurrency(saleTotal)
+      ]);
+    });
+
+    // Renderización de la tabla con jsPDF AutoTable
+    autoTable(doc, {
+      startY: 72,
+      head: head,
+      body: body,
+      theme: 'grid',
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5, cellPadding: 4 },
+      styles: { fontSize: 8, cellPadding: 3.5, font: 'helvetica', overflow: 'linebreak' },
+      columnStyles: {
+        0: { cellWidth: 35, fontStyle: 'bold' },
+        1: { cellWidth: 35 },
+        2: { cellWidth: 35 },
+        3: { cellWidth: 120 },
+        4: { cellWidth: 25, halign: 'center' },
+        5: { halign: 'right', fontStyle: 'bold', cellWidth: 32 }
+      }
+    });
+
+    // 📊 RESUMEN DE TOTALIZACIÓN (CAJA DE PIE DE PÁGINA)
+    const finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 100) + 15;
+    
+    // Validar si el cuadro de totales cabe en la página actual
+    if (finalY > 180) {
+      doc.addPage();
+      doc.setPage(doc.getNumberOfPages());
+    }
+
+    const rectY = finalY > 180 ? 20 : finalY;
+
+    doc.setFillColor(240, 253, 250); // Fondo turquesa ultra suave
+    doc.setDrawColor(45, 212, 191); // Borde turquesa
+    doc.rect(170, rectY - 8, 112, 26, 'FD');
+    
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(13, 148, 136);
+    doc.setFontSize(9.5);
+    doc.text(`PRODUCTOS VENDIDOS:  ${totalUnits} unidades`, 175, rectY);
+    
+    doc.setFontSize(11.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text(`INGRESOS TOTALES:    ${formatCurrency(totalRevenue)}`, 175, rectY + 10);
+
+    // 🚀 BÚNKER DE DESPACHO INDESTRUCTIBLE (NATIVO -> COMPARTIR -> DESCARGA)
+    const rawBlob = doc.output('blob');
+    const cleanBizName = bizName.replace(/[^a-zA-Z0-9]/g, '_');
+    const safeName = `Auditoria_Ventas_${cleanBizName}_${startVal}.pdf`;
+    const shareFile = new File([rawBlob], safeName, { type: 'application/pdf' });
+
+    let isCompleted = false;
+
+    // 1. Intento Nativo (Móvil/Emulador Capacitor)
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const base64 = doc.output('datauristring').split(',')[1];
+        const writeResult = await Filesystem.writeFile({
+          path: safeName,
+          data: base64,
+          directory: Directory.Cache,
+          recursive: true
+        });
+        
+        await Share.share({
+          title: `Auditoría de Ventas Surtihogar`,
+          text: `Comparto planilla oficial de auditoría del local ${bizName}.`,
+          url: writeResult.uri
+        });
+        
+        isCompleted = true;
+        window.showToast("✅ Enviado exitosamente al menú de compartir.", "success");
+      } catch (nativeErr) {
+        console.error("Fallo en despacho nativo de admin PDF:", nativeErr);
+      }
+    }
+
+    // 2. Intento Web Standby
+    if (!isCompleted) {
+      if (navigator.share && navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+        try {
+          await navigator.share({
+            files: [shareFile],
+            title: `Auditoría de Ventas`,
+            text: `Planilla administrativa.`
+          });
+          isCompleted = true;
+          window.showToast("✅ Compartido con éxito.", "success");
+        } catch (shareErr) {
+          console.warn("Menú web omitido, procediendo a descarga física:", shareErr);
+        }
+      }
+
+      if (!isCompleted) {
+        try {
+          doc.save(safeName);
+          isCompleted = true;
+          window.showToast("✅ Auditoría PDF descargada con éxito.", "success");
+        } catch (saveErr) {
+          console.error("Fallo doc.save() en Admin PDF:", saveErr);
+          // Fallback extremo de ancla RAM
+          const blobUrl = URL.createObjectURL(rawBlob);
+          const tempLink = document.createElement('a');
+          tempLink.href = blobUrl;
+          tempLink.download = safeName;
+          document.body.appendChild(tempLink);
+          tempLink.click();
+          document.body.removeChild(tempLink);
+          window.showToast("✅ Descarga forzada completada.", "success");
+        }
+      }
+    }
+
+  } catch (error) {
+    console.error("Error fatal en auditoría PDF Admin:", error);
+    window.showToast("❌ Error crítico e inesperado al sintetizar la auditoría.", "danger");
   }
 };
 
