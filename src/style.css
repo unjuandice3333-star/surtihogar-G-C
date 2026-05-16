@@ -473,3 +473,39 @@ select.form-input {
     padding: 15px;
   }
 }
+/* Password Toggle & Recovery */
+.password-wrapper {
+  position: relative;
+  width: 100%;
+}
+.password-toggle {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+}
+.password-toggle:hover {
+  color: var(--primary);
+}
+.forgot-password-link {
+  display: block;
+  text-align: right;
+  font-size: 13px;
+  color: var(--secondary);
+  font-weight: 600;
+  margin-top: -8px;
+  margin-bottom: 12px;
+  text-decoration: none;
+}
+.forgot-password-link:hover {
+  text-decoration: underline;
+}
