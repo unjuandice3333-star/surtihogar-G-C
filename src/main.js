@@ -10,15 +10,6 @@ import { Share } from '@capacitor/share'
 import { jsPDF } from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
-// Listener de Recuperación de Cuenta (Supabase)
-supabase.auth.onAuthStateChange((event, session) => {
-  if (event === 'PASSWORD_RECOVERY') {
-    console.log("Evento de recuperación detectado...");
-    state.view = 'reset_password';
-    render();
-  }
-});
-
 // Centralización de Filtros (Mejores Prácticas DRY)
 const RENTAL_BUSINESSES = ['Billar', 'Droguería', 'Local ropa', 'Restaurante'];
 const TEST_BUSINESSES = ['Mi Primer Negocio', 'Mi Negocio Principal'];
@@ -662,46 +653,6 @@ window.togglePasswordVisibility = (inputId, btnId) => {
   if (window.lucide) window.lucide.createIcons();
 };
 
-window.handleForgotPassword = async (e) => {
-  e.preventDefault();
-  const email = e.target.querySelector('input').value;
-  state.loading = true;
-  render();
-
-  try {
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: window.location.origin
-    });
-    if (error) throw error;
-    window.showToast("✅ Correo de recuperación enviado. Revisa tu bandeja de entrada.", "success");
-    state.view = 'auth';
-  } catch (err) {
-    window.showToast("❌ Error: " + err.message, "danger");
-  } finally {
-    state.loading = false;
-    render();
-  }
-};
-
-window.handleResetPassword = async (e) => {
-  e.preventDefault();
-  const newPassword = e.target.querySelector('input').value;
-  state.loading = true;
-  render();
-
-  try {
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    if (error) throw error;
-    window.showToast("✅ Contraseña actualizada con éxito. Ya puedes entrar.", "success");
-    state.view = 'auth';
-  } catch (err) {
-    window.showToast("❌ Error: " + err.message, "danger");
-  } finally {
-    state.loading = false;
-    render();
-  }
-};
-
 window.handleRegister = async (e) => {
   e.preventDefault();
   const btn = e.submitter || e.target.querySelector('button');
@@ -827,52 +778,12 @@ const render = () => {
             </button>
           </div>
 
-          <a href="#" class="forgot-password-link" onclick="state.view='forgot_password';render()">¿Olvidaste tu contraseña?</a>
-
           <button class="btn-primary" style="width:100%; margin-top:10px;" ${state.loading ? 'disabled' : ''}>
             ${state.loading ? 'ENTRANDO...' : 'ENTRAR'}
           </button>
         </form>
         <p style="text-align:center;margin-top:20px;">¿Nuevo? <a href="#" onclick="state.view='register';window.render()">Regístrate</a></p>
         ${state.authError?`<p class="error-text" style="color:var(--danger); text-align:center; margin-top:10px; font-weight:bold;">${state.authError}</p>`:''}
-      </div>
-    `;
-  }
-
-  else if (state.view === 'forgot_password') {
-    html = `
-      <div class="container auth-view">
-        <h1 style="text-align:center; margin-bottom:10px;">Recuperar Cuenta</h1>
-        <p style="text-align:center; color:var(--text-muted); margin-bottom:30px;">Te enviaremos un enlace a tu correo para restablecer tu clave.</p>
-        
-        <form onsubmit="window.handleForgotPassword(event)" class="card">
-          <input type="email" class="form-input" placeholder="Ingresa tu Email" required style="margin-bottom:20px;">
-          <button class="btn-primary" style="width:100%;" ${state.loading ? 'disabled' : ''}>
-            ${state.loading ? 'ENVIANDO...' : 'ENVIAR ENLACE'}
-          </button>
-        </form>
-        <p style="text-align:center;margin-top:20px;"><a href="#" onclick="state.view='auth';render()">Volver al inicio</a></p>
-      </div>
-    `;
-  }
-
-  else if (state.view === 'reset_password') {
-    html = `
-      <div class="container auth-view">
-        <h1 style="text-align:center; margin-bottom:10px;">Nueva Contraseña</h1>
-        <p style="text-align:center; color:var(--text-muted); margin-bottom:30px;">Ingresa tu nueva clave de acceso.</p>
-        
-        <form onsubmit="window.handleResetPassword(event)" class="card">
-          <div class="password-wrapper" style="margin-bottom:20px;">
-            <input type="password" id="reset-pass" class="form-input" placeholder="Nueva Clave" required>
-            <button type="button" id="reset-pass-toggle" class="password-toggle" onclick="window.togglePasswordVisibility('reset-pass', 'reset-pass-toggle')">
-              <i data-lucide="eye" style="width:20px;"></i>
-            </button>
-          </div>
-          <button class="btn-primary" style="width:100%;" ${state.loading ? 'disabled' : ''}>
-            ${state.loading ? 'ACTUALIZANDO...' : 'CAMBIAR CONTRASEÑA'}
-          </button>
-        </form>
       </div>
     `;
   }
