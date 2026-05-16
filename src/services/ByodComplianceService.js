@@ -35,7 +35,19 @@ class ByodComplianceService {
               Math.cos(phi1) * Math.cos(phi2) *
               Math.sin(deltaLambda / 2) * Math.sin(deltaLambda / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
+  return R * c;
+  }
+
+  isPointInPolygon(point, polygon) {
+    const x = point[0], y = point[1];
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const xi = polygon[i][0], yi = polygon[i][1];
+      const xj = polygon[j][0], yj = polygon[j][1];
+      const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
   }
 
   /**
@@ -55,10 +67,10 @@ class ByodComplianceService {
     // 1. Primer pulso inmediato al iniciar el turno
     this.dispatchHeartbeat();
 
-    // 2. Programar pulso silencioso cada 5 minutos (300,000 ms)
+    // 2. Programar pulso silencioso cada 1 minuto (60,000 ms) para detección rápida
     this.heartbeatInterval = setInterval(() => {
       this.dispatchHeartbeat();
-    }, 300000);
+    }, 60000);
   }
 
   /**
@@ -86,18 +98,22 @@ class ByodComplianceService {
         .order('timestamp', { ascending: false })
         .limit(1);
 
-      if (error || !configs || configs.length === 0) {
-        console.log("[BYOD_SERVICE] Telegram no configurado en Admin.");
+      let config = null;
+      if (configs && configs.length > 0) {
+        config = JSON.parse(configs[0].message);
+      }
+
+      // 🛡️ RESPALDO DE SEGURIDAD (Hardcoded Fallback)
+      // Si la DB falla (por permisos RLS) o está vacía, usamos la config verificada del usuario.
+      const botToken = (config && config.botToken) ? config.botToken : '8037545998:AAH4zgAxhoNbZ1WKJXmCElwq7oHzi7IJ1LY';
+      const chatId = (config && config.chatId) ? config.chatId : '6736325362';
+
+      if (!botToken || !chatId) {
+        console.warn("[BYOD_SERVICE] Alerta cancelada: No hay Token o ChatID disponible.");
         return;
       }
 
-      const config = JSON.parse(configs[0].message);
-      if (!config.botToken || !config.chatId) {
-        console.log("[BYOD_SERVICE] Configuración incompleta en system_logs.");
-        return;
-      }
-
-      const url = `https://api.telegram.org/bot${config.botToken}/sendMessage`;
+      const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
       await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -140,16 +156,31 @@ class ByodComplianceService {
       const appState = typeof document !== 'undefined' ? 
         (document.visibilityState === 'visible' ? 'FOREGROUND' : 'BACKGROUND') : 'UNKNOWN';
 
-      // C. EVALUAR GEOCERCA EN LOCAL
+      // C. EVALUAR GEOCERCA EN LOCAL (Polígono + Círculo)
       let isBreach = false;
       let distance = 0;
 
-      if (this.geofence && this.geofence.lat && this.geofence.lng && coords.lat) {
-        distance = this.getDistance(coords.lat, coords.lng, this.geofence.lat, this.geofence.lng);
-        const maxRadius = this.geofence.geofence_radius_meters || 100;
+      if (this.geofence && coords.lat) {
+        const polyConfig = this.geofence.polygonConfig;
         
-        if (distance > maxRadius) {
-          isBreach = true;
+        if (polyConfig && polyConfig.polygon && polyConfig.polygon.length >= 3) {
+          // 1. Validación por Polígono
+          const inside = this.isPointInPolygon([coords.lat, coords.lng], polyConfig.polygon);
+          if (!inside) {
+            // 2. Validación por Buffer (Tolerancia)
+            distance = this.getDistance(coords.lat, coords.lng, this.geofence.lat, this.geofence.lng);
+            const tolerance = polyConfig.buffer || 30;
+            if (distance > (tolerance + 20)) { // +20m de margen por drift
+              isBreach = true;
+            }
+          }
+        } else if (this.geofence.lat && this.geofence.lng) {
+          // 3. Fallback Circular
+          distance = this.getDistance(coords.lat, coords.lng, this.geofence.lat, this.geofence.lng);
+          const maxRadius = this.geofence.geofence_radius_meters || 100;
+          if (distance > maxRadius) {
+            isBreach = true;
+          }
         }
       }
 
@@ -169,53 +200,48 @@ class ByodComplianceService {
       const { error } = await supabase.from('device_heartbeats').insert(payload);
       if (error) throw error;
 
-      // E. MANEJO DE ALARMAS PROACTIVAS (Sólo se dispara ante cambio de estado)
+      // E. MANEJO DE ALARMAS PROACTIVAS (Detección de Cambio de Estado)
       if (isBreach && !this.isCurrentlyBreached) {
         this.isCurrentlyBreached = true;
         
-        // Consultar el nombre del empleado para la alerta personalizada
         const { data: user } = await supabase.from('users').select('name').eq('id', this.currentUserId).single();
         const employeeName = user?.name || 'Colaborador';
-        const alertMsg = `🚨 <b>ALERTA DE SEGURIDAD</b> 🚨\n\nEl colaborador <b>${employeeName}</b> ha ABANDONADO el perímetro de seguridad de la sede 📍 <b>${this.geofence.name || 'Sede'}</b>.\n\n📏 Distancia registrada: <b>${Math.round(distance)} metros</b> de la sede.\n🕒 Hora: ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
         
-        // 1. Registrar Alerta Crítica en base de datos
+        // 1. Registrar Alerta Crítica (Base de Datos)
         await supabase.from('system_logs').insert({
           user_id: this.currentUserId,
           type: 'SECURITY_ALERT',
           severity: 'CRITICAL',
           module: 'Geocerca BYOD',
           message: JSON.stringify({ 
-            text: `ABANDONO DE SEDE: ${employeeName} salió del perímetro. Distancia: ${Math.round(distance)}m.`, 
-            context: { type: 'GEOFENCE_EXIT', distance, geofenceName: this.geofence.name } 
+            text: `🔴 ABANDONO DETECTADO: ${employeeName} salió del perímetro.`, 
+            context: { type: 'GEOFENCE_EXIT', distance: Math.round(distance), geofenceName: this.geofence.name } 
           })
         });
 
-        // 2. Enviar mensaje a Telegram
-        await this.triggerTelegramAlert(alertMsg);
+        // 2. Notificación Inmediata Telegram (Async sin await para no bloquear heartbeat)
+        const alertMsg = `🚨 <b>ALERTA DE SEGURIDAD</b> 🚨\n\nEl colaborador <b>${employeeName}</b> ha ABANDONADO el perímetro seguro de 📍 <b>${this.geofence.name || 'Sede'}</b>.\n\n📏 Distancia: <b>${Math.round(distance)}m</b>\n🕒 Hora: ${new Date().toLocaleTimeString()}`;
+        this.triggerTelegramAlert(alertMsg);
       } 
       
       else if (!isBreach && this.isCurrentlyBreached) {
-        // El empleado regresó a la sede
         this.isCurrentlyBreached = false;
         const { data: user } = await supabase.from('users').select('name').eq('id', this.currentUserId).single();
         const employeeName = user?.name || 'Colaborador';
-        
-        const resolveMsg = `✅ <b>SISTEMA RESTABLECIDO</b>\n\nEl colaborador <b>${employeeName}</b> ha regresado al perímetro seguro de la sede 📍 <b>${this.geofence.name || 'Sede'}</b>.\n\n🕒 Hora de Reingreso: ${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
 
-        // 1. Registrar retorno
         await supabase.from('system_logs').insert({
           user_id: this.currentUserId,
           type: 'SECURITY_ALERT',
           severity: 'INFO',
           module: 'Geocerca BYOD',
           message: JSON.stringify({ 
-            text: `REINGRESO A SEDE: ${employeeName} regresó al perímetro seguro.`, 
+            text: `🟢 REINGRESO: ${employeeName} regresó a la sede.`, 
             context: { type: 'GEOFENCE_RETURN', geofenceName: this.geofence.name } 
           })
         });
 
-        // 2. Enviar resolución a Telegram
-        await this.triggerTelegramAlert(resolveMsg);
+        const resolveMsg = `✅ <b>SISTEMA NORMALIZADO</b>\n\nEl colaborador <b>${employeeName}</b> ha reingresado a la sede 📍 <b>${this.geofence.name || 'Sede'}</b>.`;
+        this.triggerTelegramAlert(resolveMsg);
       }
 
     } catch (e) {

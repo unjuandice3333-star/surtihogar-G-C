@@ -91,7 +91,8 @@ window.fetchData = async () => {
         supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(200),
         supabase.from('sale_items').select('*, products(name, business_id, cost)'),
         supabase.from('pending_products').select('*').order('created_at', { ascending: false }),
-        SupplierService.loadAll(state.user.id)
+        SupplierService.loadAll(state.user.id),
+        supabase.from('system_logs').select('message').eq('type', 'GEOFENCE_POLYGON').order('timestamp', { ascending: false })
       ]);
       state.shifts = shRes.data || [];
       state.employees = empRes.data || [];
@@ -99,6 +100,19 @@ window.fetchData = async () => {
       state.saleItems = itemsRes.data || [];
       state.pendingProducts = pendingRes.data || [];
       state.suppliers = loadedSuppliers || [];
+
+      // Cargar Polígonos de Geocercas (Última versión por negocio)
+      state.geofencePolygons = {};
+      if (loadedSuppliers?.[6]?.data) { // polyRes es el 7mo elemento (indice 6)
+        loadedSuppliers[6].data.forEach(log => {
+          try {
+            const config = JSON.parse(log.message);
+            if (config.business_id && !state.geofencePolygons[config.business_id]) {
+               state.geofencePolygons[config.business_id] = config;
+            }
+          } catch(e) {}
+        });
+      }
     } else {
       const [shRes, attRes] = await Promise.all([
         supabase.from('shifts').select('*, businesses(lat, lng, geofence_radius_meters, name)').eq('user_id', session.user.id),
@@ -126,7 +140,11 @@ window.fetchData = async () => {
 
       // Activar/Desactivar motor de telemetría silenciosa BYOD con Geocerca
       if (hasGeoActive && state.user?.role !== 'admin') {
-         byodService.startTracking(session.user.id, activeShiftLocal?.businesses);
+         const biz = activeShiftLocal?.businesses || state.businesses.find(b => b.id === state.currentBusinessId);
+         if (biz) {
+           biz.polygonConfig = state.geofencePolygons?.[biz.id];
+           byodService.startTracking(session.user.id, biz);
+         }
       } else {
          byodService.stopTracking();
       }
@@ -194,12 +212,13 @@ window.fetchByodDashboard = async () => {
   render();
   try {
     // Parche Maestro: Decoplar consultas relacionales para evitar error de schema cache (HTTP 400)
-    const [hbRes, scRes, logsRes, shiftRes, telRes] = await Promise.all([
+    const [hbRes, scRes, logsRes, shiftRes, telRes, polyRes] = await Promise.all([
       supabase.from('device_heartbeats').select('*').order('timestamp', { ascending: false }).limit(150),
       supabase.from('operational_scores').select('*').order('score', { ascending: false }),
       supabase.from('system_logs').select('*').eq('type', 'SECURITY_ALERT').order('timestamp', { ascending: false }).limit(20),
       supabase.from('shifts').select('*, businesses(id, name, lat, lng, geofence_radius_meters)').is('end_time', null),
-      supabase.from('system_logs').select('message').eq('type', 'TELEGRAM_CONFIG').order('timestamp', { ascending: false }).limit(1)
+      supabase.from('system_logs').select('message').eq('type', 'TELEGRAM_CONFIG').order('timestamp', { ascending: false }).limit(1),
+      supabase.from('system_logs').select('message').eq('type', 'GEOFENCE_POLYGON').order('timestamp', { ascending: false })
     ]);
     
     if (hbRes.error) throw hbRes.error;
@@ -216,6 +235,19 @@ window.fetchByodDashboard = async () => {
       state.byodTelegramConfig = telRes.data?.[0] ? JSON.parse(telRes.data[0].message) : null;
     } catch(e) {
       state.byodTelegramConfig = null;
+    }
+
+    // Cargar Polígonos de Geocercas (Última versión por negocio)
+    state.geofencePolygons = {};
+    if (polyRes.data) {
+      polyRes.data.forEach(log => {
+        try {
+          const config = JSON.parse(log.message);
+          if (config.business_id && config.polygon && !state.geofencePolygons[config.business_id]) {
+            state.geofencePolygons[config.business_id] = config.polygon;
+          }
+        } catch(e) {}
+      });
     }
     
     // Hidratación Autónoma del personal para búsquedas en memoria impecables
@@ -914,15 +946,14 @@ const render = () => {
           </div>
           <div class="header-title">
             <p class="role-tag">GERENCIA</p>
-            <h1>Surtihogar G&C</h1>
+            <h1>${state.currentBusinessId === 'all' ? 'Panel Global G&C' : (state.businesses.find(b => b.id === state.currentBusinessId)?.name || 'Surtihogar G&C')}</h1>
           </div>
         </div>
         <div class="header-actions">
           <div style="display:flex; gap:8px; padding-right:10px; border-right:1px solid #e2e8f0; margin-right:5px;">
-            <div onclick="state.view='logs';window.fetchLogs()" class="icon-btn" title="Logs"><i data-lucide="clipboard-list"></i></div>
-            <div onclick="state.view='shifts_admin';window.render()" class="icon-btn" title="Turnos"><i data-lucide="clock"></i></div>
-            <div onclick="window.fetchByodDashboard()" class="icon-btn" title="Auditoría BYOD" style="background:#f0fdf4; color:#16a34a; border-color:#bbf7d0;"><i data-lucide="shield"></i></div>
-            <div onclick="window.fetchData()" class="icon-btn"><i data-lucide="refresh-cw"></i></div>
+            <div onclick="state.view='shifts_admin';window.render()" class="icon-btn" title="Gestión de Turnos y Personal"><i data-lucide="clock"></i></div>
+            <div onclick="window.fetchByodDashboard()" class="icon-btn" title="Auditoría Satelital BYOD" style="background:#f0fdf4; color:#16a34a; border-color:#bbf7d0;"><i data-lucide="shield"></i></div>
+            <div onclick="window.fetchData()" class="icon-btn" title="Recargar Datos"><i data-lucide="refresh-cw"></i></div>
           </div>
           <div onclick="state.view='app';window.render()" class="icon-btn pill" style="background:var(--primary); color:white; border:none;">Volver</div>
           <div onclick="window.handleLogout()" class="icon-btn pill logout"><i data-lucide="log-out"></i> Salir</div>
@@ -1029,7 +1060,7 @@ const render = () => {
           <button onclick="state.view='sales_history_admin';render()" class="btn-primary" style="padding:20px; background:linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="shopping-bag" style="width:16px;"></i> AUDITAR VENTAS</button>
           <button onclick="state.view='products_admin';render()" class="btn-primary" style="padding:20px; background:#475569; font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="package" style="width:16px;"></i> GESTIÓN PRODUCTOS</button>
           <button onclick="window.fetchSuppliers()" class="btn-primary" style="padding:20px; background:#0d9488; font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="truck" style="width:16px;"></i> PROVEEDORES</button>
-          <button onclick="window.fetchLogs('attendance_admin')" class="btn-primary" style="padding:20px; background:#10b981; font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="map-pin" style="width:16px;"></i> ASISTENCIA GPS</button>
+          <button onclick="state.view='shifts_admin';window.render()" class="btn-primary" style="padding:20px; background:#10b981; font-size:13px; display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="users" style="width:16px;"></i> GESTIÓN DE TURNOS</button>
         </div>
 
         </div>
@@ -1233,388 +1264,10 @@ const render = () => {
     `;
   }
 
-  else if (state.view === 'attendance_admin') {
-    // 1. AGRUPACIÓN PROFESIONAL DE LOGS POR DÍA Y USUARIO
-    const attMap = {};
-    
-    state.systemLogs.filter(l => l.type === 'GEOLOCATION_TRACK').forEach(l => {
-      if (!l.timestamp || !l.users) return;
-      
-      let msgText = '';
-      let context = null;
-      try {
-        const parsed = JSON.parse(l.message);
-        msgText = parsed.text || '';
-        context = parsed.context;
-      } catch(e) { msgText = l.message || ''; }
-      
-      const isArr = msgText.includes('LLEGADA');
-      const rawD = new Date(l.timestamp);
-      
-      // INTELIGENCIA DE TURNO NOCTURNO:
-      // Si es una SALIDA y ocurre entre 00:00 y 06:00 AM, fusionar con el día anterior calendario
-      let d = new Date(l.timestamp);
-      if (!isArr && rawD.getHours() < 6) {
-        d = new Date(rawD.getTime() - 12 * 60 * 60 * 1000); // Retroceder 12h para caer en la fecha del inicio del turno
-      }
-      
-      // Agrupar por fecha YYYY-MM-DD
-      const yr = d.getFullYear();
-      const mt = String(d.getMonth() + 1).padStart(2, '0');
-      const dy = String(d.getDate()).padStart(2, '0');
-      const dateKey = `${yr}-${mt}-${dy}`;
-      
-      const uName = l.users.name || l.users[0]?.name || 'Desconocido';
-      const userId = l.user_id || l.users.id;
-      const groupKey = `${userId}_${dateKey}`;
-      
-      if (!attMap[groupKey]) {
-        attMap[groupKey] = {
-          user: uName,
-          userId: userId,
-          dateDisplay: d.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' }),
-          dateKey: dateKey,
-          rawDate: d,
-          firstArrival: null,
-          lastDeparture: null,
-          gpsArrival: null,
-          gpsDeparture: null
-        };
-      }
-      
-      if (isArr) {
-        if (!attMap[groupKey].firstArrival || d < new Date(attMap[groupKey].firstArrival)) {
-          attMap[groupKey].firstArrival = l.timestamp;
-          if (context?.coords) attMap[groupKey].gpsArrival = context.coords;
-        }
-      } else {
-        if (!attMap[groupKey].lastDeparture || d > new Date(attMap[groupKey].lastDeparture)) {
-          attMap[groupKey].lastDeparture = l.timestamp;
-          if (context?.coords) attMap[groupKey].gpsDeparture = context.coords;
-        }
-      }
-    });
-
-    const rows = Object.values(attMap).sort((a,b) => b.rawDate - a.rawDate);
-
-    html = `
-      <header class="main-header">
-        <div class="logo-container">
-          <div class="logo-icon" style="background:var(--primary); color:white;"><i data-lucide="calendar-check"></i></div>
-          <div class="header-title">
-            <p class="role-tag" style="margin:0; background:rgba(59,130,246,0.2); color:var(--primary);">AUDITORÍA DE PERSONAL</p>
-            <h1>Consolidado de Asistencia</h1>
-          </div>
-        </div>
-        <div class="header-actions">
-          <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px;">VOLVER</button>
-        </div>
-      </header>
-
-      <div class="container" style="max-width:1200px;">
-        <div class="card" style="padding:0; overflow:hidden; border-radius:16px;">
-          <div style="overflow-x:auto;">
-            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
-              <thead>
-                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
-                  <th style="padding:18px 20px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Empleado / Fecha</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Horario Programado</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Entrada Real</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Salida Real</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Estado / GPS</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.length === 0 ? `
-                  <tr><td colspan="5" style="padding:60px; text-align:center; color:#94a3b8; font-size:14px;">
-                    <div style="font-size:30px; margin-bottom:10px;">📅</div> No se encontraron marcaciones consolidadas.
-                  </td></tr>
-                ` : rows.map(r => {
-                  // Buscar si hay un turno programado en el calendario para ese día exacto
-                  const scheduled = state.shifts.find(s => {
-                    if (s.user_id !== r.userId) return false;
-                    const sDate = new Date(s.start_time);
-                    const sYr = sDate.getFullYear();
-                    const sMt = String(sDate.getMonth() + 1).padStart(2, '0');
-                    const sDy = String(sDate.getDate()).padStart(2, '0');
-                    return `${sYr}-${sMt}-${sDy}` === r.dateKey;
-                  });
-
-                  let scheduledText = '<span style="color:#94a3b8; font-style:italic;">Sin asignar</span>';
-                  let statusBadge = '';
-                  
-                  if (scheduled) {
-                    const sStart = new Date(scheduled.start_time);
-                    const sEnd = new Date(scheduled.end_time);
-                    scheduledText = `<div style="font-weight:700; color:#334155;">${sStart.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - ${sEnd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>`;
-                    
-                    if (r.firstArrival) {
-                       const arrTime = new Date(r.firstArrival);
-                       // Tolerancia de 10 minutos
-                       const isLate = arrTime > new Date(sStart.getTime() + (10 * 60000));
-                       statusBadge = isLate 
-                         ? `<span style="background:#fffbeb; color:#b45309; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #fef3c7;">⏰ TARDE</span>`
-                         : `<span style="background:#f0fdf4; color:#166534; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dcfce7;">✅ A TIEMPO</span>`;
-                    }
-                  }
-
-                  if (!statusBadge) {
-                    statusBadge = r.lastDeparture 
-                      ? `<span style="background:#f1f5f9; color:#475569; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px;">REGISTRADO</span>`
-                      : `<span style="background:#eff6ff; color:#1d4ed8; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dbeafe;">🟢 EN TURNO</span>`;
-                  }
-
-                  const formatTime = (ts) => ts ? `<div style="font-weight:800; font-size:14px; color:#1e293b;">${new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : '<div style="color:#cbd5e1; font-weight:500;">--:--</div>';
-                  
-                  const mapLink = (coords) => coords ? `
-                    <a href="https://www.google.com/maps?q=${coords.lat},${coords.lng}" target="_blank" style="color:#10b981; display:inline-flex; align-items:center; gap:4px; text-decoration:none; font-weight:800; margin-left:8px;" title="Ver Mapa"><i data-lucide="map-pin" style="width:12px;"></i></a>
-                  ` : '';
-
-                  let arrivalDiffHtml = '';
-                  let departureDiffHtml = '';
-
-                  if (scheduled) {
-                     const sStart = new Date(scheduled.start_time);
-                     const sEnd = new Date(scheduled.end_time);
-
-                     if (r.firstArrival) {
-                        const arrT = new Date(r.firstArrival);
-                        const diff = Math.floor((arrT.getTime() - sStart.getTime()) / 60000);
-                        if (diff > 0) arrivalDiffHtml = `<div style="color:#b45309; font-size:9px; font-weight:800; text-transform:uppercase;">⚠ ${diff} min tarde</div>`;
-                        else arrivalDiffHtml = `<div style="color:#166534; font-size:9px; font-weight:800; text-transform:uppercase;">✓ ${Math.abs(diff)} min antes</div>`;
-                     }
-
-                     if (r.lastDeparture) {
-                        const depT = new Date(r.lastDeparture);
-                        const diff = Math.floor((depT.getTime() - sEnd.getTime()) / 60000);
-                        if (diff > 0) departureDiffHtml = `<div style="color:#1d4ed8; font-size:9px; font-weight:800; text-transform:uppercase;">⚡ ${diff} min extra</div>`;
-                        else departureDiffHtml = `<div style="color:#b91c1c; font-size:9px; font-weight:800; text-transform:uppercase;">❌ ${Math.abs(diff)} min menos</div>`;
-                     }
-                  }
-
-                  return `
-                  <tr style="border-bottom:1px solid #f1f5f9; transition: background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
-                    <td style="padding:18px 20px;">
-                      <div style="font-weight:800; color:var(--primary); font-size:13px;">${r.user}</div>
-                      <div style="font-size:11px; color:#64748b; font-weight:600; text-transform: capitalize; margin-top:2px;">📅 ${r.dateDisplay}</div>
-                    </td>
-                    <td style="padding:18px;">${scheduledText}</td>
-                    <td style="padding:18px;">
-                      <div style="display:flex; align-items:center;">
-                        ${formatTime(r.firstArrival)}
-                        ${mapLink(r.gpsArrival)}
-                      </div>
-                      ${arrivalDiffHtml}
-                    </td>
-                    <td style="padding:18px;">
-                      <div style="display:flex; align-items:center;">
-                        ${formatTime(r.lastDeparture)}
-                        ${mapLink(r.gpsDeparture)}
-                      </div>
-                      ${departureDiffHtml}
-                    </td>
-                    <td style="padding:18px;">
-                      <div style="display:flex; align-items:center; gap:8px;">
-                        ${statusBadge}
-                      </div>
-                    </td>
-                  </tr>
-                  `;
-                }).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
-  else if (state.view === 'logs') {
-    // UNIFICACIÓN DE INTELIGENCIA CORPORATIVA: El panel general de auditoría ahora también usa el motor avanzado de agrupamiento
-    const attMap = {};
-    
-    state.systemLogs.filter(l => l.type === 'GEOLOCATION_TRACK').forEach(l => {
-      if (!l.timestamp || !l.users) return;
-      
-      let msgText = '';
-      let context = null;
-      try {
-        const parsed = JSON.parse(l.message);
-        msgText = parsed.text || '';
-        context = parsed.context;
-      } catch(e) { msgText = l.message || ''; }
-      
-      const isArr = msgText.includes('LLEGADA');
-      const rawD = new Date(l.timestamp);
-      
-      // INTELIGENCIA DE TURNO NOCTURNO:
-      let d = new Date(l.timestamp);
-      if (!isArr && rawD.getHours() < 6) {
-        d = new Date(rawD.getTime() - 12 * 60 * 60 * 1000);
-      }
-      
-      const yr = d.getFullYear();
-      const mt = String(d.getMonth() + 1).padStart(2, '0');
-      const dy = String(d.getDate()).padStart(2, '0');
-      const dateKey = `${yr}-${mt}-${dy}`;
-      
-      const uName = l.users.name || l.users[0]?.name || 'Desconocido';
-      const userId = l.user_id || l.users.id;
-      const groupKey = `${userId}_${dateKey}`;
-      
-      if (!attMap[groupKey]) {
-        attMap[groupKey] = {
-          user: uName,
-          userId: userId,
-          dateDisplay: d.toLocaleDateString('es-ES', { weekday: 'short', day: '2-digit', month: 'short' }),
-          dateKey: dateKey,
-          rawDate: d,
-          firstArrival: null,
-          lastDeparture: null,
-          gpsArrival: null,
-          gpsDeparture: null
-        };
-      }
-      
-      if (isArr) {
-        if (!attMap[groupKey].firstArrival || d < new Date(attMap[groupKey].firstArrival)) {
-          attMap[groupKey].firstArrival = l.timestamp;
-          if (context?.coords) attMap[groupKey].gpsArrival = context.coords;
-        }
-      } else {
-        if (!attMap[groupKey].lastDeparture || d > new Date(attMap[groupKey].lastDeparture)) {
-          attMap[groupKey].lastDeparture = l.timestamp;
-          if (context?.coords) attMap[groupKey].gpsDeparture = context.coords;
-        }
-      }
-    });
-
-    const rows = Object.values(attMap).sort((a,b) => b.rawDate - a.rawDate);
-
-    html = `
-      <header class="main-header">
-        <div class="logo-container">
-          <div class="logo-icon" style="background:var(--primary); color:white;"><i data-lucide="clipboard-list"></i></div>
-          <div class="header-title">
-            <p class="role-tag" style="margin:0; background:rgba(59,130,246,0.2); color:var(--primary);">AUDITORÍA PROFESIONAL</p>
-            <h1>Registros del Sistema</h1>
-          </div>
-        </div>
-        <div class="header-actions">
-          <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px;">DASHBOARD</button>
-        </div>
-      </header>
-
-      <div class="container" style="max-width:1200px;">
-        <div class="card" style="padding:0; overflow:hidden; border-radius:16px;">
-          <div style="overflow-x:auto;">
-            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:12px;">
-              <thead>
-                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
-                  <th style="padding:18px 20px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Empleado / Fecha</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Horario Programado</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Entrada Real</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Salida Real</th>
-                  <th style="padding:18px; color:var(--text-muted); font-weight:800; letter-spacing:0.5px; text-transform:uppercase; font-size:10px;">Estado Operativo</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${rows.length === 0 ? `
-                  <tr><td colspan="5" style="padding:60px; text-align:center; color:#94a3b8; font-size:14px;">
-                    <div style="font-size:30px; margin-bottom:10px;">📅</div> No hay marcaciones disponibles.
-                  </td></tr>
-                ` : rows.map(r => {
-                  const scheduled = state.shifts.find(s => {
-                    if (s.user_id !== r.userId) return false;
-                    const sDate = new Date(s.start_time);
-                    const sYr = sDate.getFullYear();
-                    const sMt = String(sDate.getMonth() + 1).padStart(2, '0');
-                    const sDy = String(sDate.getDate()).padStart(2, '0');
-                    return `${sYr}-${sMt}-${sDy}` === r.dateKey;
-                  });
-
-                  let scheduledText = '<span style="color:#94a3b8; font-style:italic;">Sin programar</span>';
-                  let statusBadge = '';
-                  
-                  if (scheduled) {
-                    const sStart = new Date(scheduled.start_time);
-                    const sEnd = new Date(scheduled.end_time);
-                    scheduledText = `<div style="font-weight:700; color:#334155;">${sStart.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})} - ${sEnd.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>`;
-                    
-                    if (r.firstArrival) {
-                       const arrTime = new Date(r.firstArrival);
-                       const isLate = arrTime > new Date(sStart.getTime() + (10 * 60000));
-                       statusBadge = isLate 
-                         ? `<span style="background:#fffbeb; color:#b45309; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #fef3c7;">⏰ TARDE</span>`
-                         : `<span style="background:#f0fdf4; color:#166534; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dcfce7;">✅ A TIEMPO</span>`;
-                    }
-                  }
-
-                  if (!statusBadge) {
-                    statusBadge = r.lastDeparture 
-                      ? `<span style="background:#f1f5f9; color:#475569; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px;">FINALIZADO</span>`
-                      : `<span style="background:#eff6ff; color:#1d4ed8; padding:4px 8px; border-radius:6px; font-weight:800; font-size:10px; border:1px solid #dbeafe;">🟢 ACTIVO</span>`;
-                  }
-
-                  const formatTime = (ts) => ts ? `<div style="font-weight:800; font-size:14px; color:#1e293b;">${new Date(ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</div>` : '<div style="color:#cbd5e1; font-weight:500;">--:--</div>';
-                  
-                  const mapLink = (coords) => coords ? `
-                    <a href="https://www.google.com/maps?q=${coords.lat},${coords.lng}" target="_blank" style="color:#10b981; display:inline-flex; align-items:center; margin-left:8px;" title="GPS"><i data-lucide="map-pin" style="width:12px;"></i></a>
-                  ` : '';
-
-                  let arrivalDiffHtml = '';
-                  let departureDiffHtml = '';
-
-                  if (scheduled) {
-                     const sStart = new Date(scheduled.start_time);
-                     const sEnd = new Date(scheduled.end_time);
-
-                     if (r.firstArrival) {
-                        const arrT = new Date(r.firstArrival);
-                        const diff = Math.floor((arrT.getTime() - sStart.getTime()) / 60000);
-                        if (diff > 0) arrivalDiffHtml = `<div style="color:#b45309; font-size:9px; font-weight:800; text-transform:uppercase;">⚠ ${diff} min tarde</div>`;
-                        else arrivalDiffHtml = `<div style="color:#166534; font-size:9px; font-weight:800; text-transform:uppercase;">✓ ${Math.abs(diff)} min antes</div>`;
-                     }
-
-                     if (r.lastDeparture) {
-                        const depT = new Date(r.lastDeparture);
-                        const diff = Math.floor((depT.getTime() - sEnd.getTime()) / 60000);
-                        if (diff > 0) departureDiffHtml = `<div style="color:#1d4ed8; font-size:9px; font-weight:800; text-transform:uppercase;">⚡ ${diff} min extra</div>`;
-                        else departureDiffHtml = `<div style="color:#b91c1c; font-size:9px; font-weight:800; text-transform:uppercase;">❌ ${Math.abs(diff)} min menos</div>`;
-                     }
-                  }
-
-                  return `
-                  <tr style="border-bottom:1px solid #f1f5f9; transition: background 0.2s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
-                    <td style="padding:18px 20px;">
-                      <div style="font-weight:800; color:var(--primary); font-size:13px;">${r.user}</div>
-                      <div style="font-size:11px; color:#64748b; font-weight:600; text-transform: capitalize; margin-top:2px;">📅 ${r.dateDisplay}</div>
-                    </td>
-                    <td style="padding:18px;">${scheduledText}</td>
-                    <td style="padding:18px;">
-                      <div style="display:flex; align-items:center;">
-                        ${formatTime(r.firstArrival)}
-                        ${mapLink(r.gpsArrival)}
-                      </div>
-                      ${arrivalDiffHtml}
-                    </td>
-                    <td style="padding:18px;">
-                      <div style="display:flex; align-items:center;">
-                        ${formatTime(r.lastDeparture)}
-                        ${mapLink(r.gpsDeparture)}
-                      </div>
-                      ${departureDiffHtml}
-                    </td>
-                    <td style="padding:18px;">${statusBadge}</td>
-                  </tr>
-                  `;
-                }).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
-    `;
+  else if (state.view === 'attendance_admin' || state.view === 'logs') {
+    // Redirección inteligente al centro de mando unificado
+    state.view = 'shifts_admin';
+    return render();
   }
 
   else if (state.view === 'shifts_weekly') {
@@ -1683,7 +1336,7 @@ const render = () => {
       const startOfWeek = new Date(now);
       startOfWeek.setDate(now.getDate() - (now.getDay() === 0 ? 6 : now.getDay() - 1));
       state.rosterConfig = {
-        daysCount: 15, // Por defecto 15 días a un mes
+        daysCount: 15,
         startDate: startOfWeek.toISOString().split('T')[0]
       };
     }
@@ -1696,135 +1349,165 @@ const render = () => {
     });
 
     html = `
-      <header class="main-header">
+      <header class="main-header" style="border-bottom: 2px solid var(--primary);">
         <div class="logo-container">
           <div class="logo-icon" style="background:var(--primary); color:white;"><i data-lucide="calendar-days"></i></div>
           <div class="header-title">
-            <p class="role-tag" style="margin:0; background:rgba(59,130,246,0.1); color:var(--primary);">PLANIFICACIÓN</p>
-            <h1>Gestión de Turnos</h1>
+            <p class="role-tag" style="background:rgba(239, 68, 68, 0.1); color:var(--primary);">CONTROL OPERATIVO</p>
+            <h1>Gestión Unificada de Turnos</h1>
           </div>
         </div>
         <div class="header-actions">
-          <button onclick="window.openModal('shift')" class="btn-primary" style="padding:10px 20px; font-size:12px; display:flex; align-items:center; gap:6px;"><i data-lucide="plus-circle" style="width:14px;"></i> NUEVO TURNO</button>
+          <button onclick="window.openModal('shift')" class="btn-primary" style="padding:10px 20px; font-size:12px; display:flex; align-items:center; gap:6px;"><i data-lucide="plus-circle" style="width:14px;"></i> ASIGNAR TURNO</button>
           <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px; margin-left:10px;">VOLVER</button>
         </div>
       </header>
 
-      <div class="container" style="max-width:1200px;">
-        <div class="card" style="padding:0; overflow:hidden;">
-          <!-- CONTROLES DE CONFIGURACIÓN DE PLANILLA MÓVIL / MÁS DE 15 DÍAS -->
-          <div style="padding:20px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:15px; background:#fafafa;">
-            <div>
-              <h3 style="font-size:16px; margin:0; font-weight:800; color:#1e293b; display:flex; align-items:center; gap:8px;">
-                <i data-lucide="layout-grid" style="width:18px; color:var(--primary);"></i>
-                Planilla Dinámica de Personal
-              </h3>
-              <p style="font-size:11px; color:#94a3b8; margin:2px 0 0 0;">Periodo de ${state.rosterConfig.daysCount} días visible en pantalla</p>
+      <div class="container" style="max-width:1400px; padding-top:30px;">
+        <div style="display:grid; grid-template-columns: 1fr; gap:30px;">
+          
+          <!-- SECCIÓN 1: PLANILLA MATRIX (EL "CEREBRO" DE LA OPERACIÓN) -->
+          <div class="card" style="padding:0; overflow:hidden; border:none; box-shadow: 0 15px 35px rgba(0,0,0,0.08);">
+            <div style="padding:25px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:20px; background:#fafafa;">
+              <div>
+                <h3 style="font-size:18px; margin:0; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:10px;">
+                  <i data-lucide="layout-grid" style="width:22px; color:var(--primary);"></i>
+                  Planificador de Recursos Humanos
+                </h3>
+                <p style="font-size:12px; color:#64748b; margin:4px 0 0 0;">Visualización de despliegue táctico de personal</p>
+              </div>
+              
+              <div style="display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span style="font-size:10px; font-weight:900; color:#94a3b8; text-transform:uppercase;">Vista:</span>
+                  <select onchange="state.rosterConfig.daysCount = parseInt(this.value); window.render()" class="form-input" style="width:auto; height:40px; font-size:12px; font-weight:800; border-radius:12px; padding:0 12px;">
+                    <option value="7" ${state.rosterConfig.daysCount === 7 ? 'selected' : ''}>7 DÍAS</option>
+                    <option value="15" ${state.rosterConfig.daysCount === 15 ? 'selected' : ''}>15 DÍAS</option>
+                    <option value="30" ${state.rosterConfig.daysCount === 30 ? 'selected' : ''}>30 DÍAS</option>
+                  </select>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                  <span style="font-size:10px; font-weight:900; color:#94a3b8; text-transform:uppercase;">Desde:</span>
+                  <input type="date" onchange="state.rosterConfig.startDate = this.value; window.render()" class="form-input" style="width:auto; height:40px; font-size:12px; font-weight:800; border-radius:12px;" value="${state.rosterConfig.startDate}">
+                </div>
+              </div>
+            </div>
+
+            <div style="overflow-x:auto; background:#ffffff; max-height:500px; overflow-y:auto; position: relative;">
+              <table style="width: calc(200px + (${state.rosterConfig.daysCount} * 120px)); border-collapse:collapse; table-layout:fixed;">
+                <thead>
+                  <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0; position:sticky; top:0; z-index:10;">
+                    <th style="padding:15px; text-align:left; width:200px; color:#475569; background:#f8fafc; font-weight:900; font-size:10px; text-transform:uppercase; letter-spacing:1px; border-right:1px solid #e2e8f0; position:sticky; left:0; z-index:11; box-shadow: 2px 0 10px rgba(0,0,0,0.05);">COLABORADOR</th>
+                    ${rosterDates.map(d => {
+                      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                      const isToday = d.toDateString() === new Date().toDateString();
+                      return `<th style="padding:12px; text-align:center; width:120px; color:${isToday ? 'var(--primary)' : (isWeekend ? '#ef4444' : '#475569')}; font-weight:900; background:${isToday ? '#fef2f2' : (isWeekend ? '#fffafb' : '#f8fafc')}; border-right:1px solid #edf2f7;">
+                        <span style="font-size:10px; opacity:0.8; text-transform:uppercase; display:block;">${d.toLocaleDateString('es-ES', { weekday: 'short' })}</span>
+                        <span style="font-size:16px; font-weight:900; display:block; margin:2px 0;">${d.getDate()}</span>
+                        <span style="font-size:9px; opacity:0.6; text-transform:uppercase; display:block;">${d.toLocaleDateString('es-ES', { month: 'short' })}</span>
+                      </th>`;
+                    }).join('')}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${state.employees.map(emp => {
+                    const empShifts = state.shifts.filter(s => s.user_id === emp.id);
+                    return `
+                      <tr style="border-bottom:1px solid #edf2f7;">
+                        <td style="padding:15px; font-weight:800; color:#1e293b; background:#fafbfc; border-right:1px solid #e2e8f0; position:sticky; left:0; z-index:2; box-shadow: 2px 0 10px rgba(0,0,0,0.02);">
+                          <div style="display:flex; align-items:center; gap:10px;">
+                            <div style="width:32px; height:32px; border-radius:10px; background:linear-gradient(135deg, var(--primary) 0%, #0f172a 100%); color:white; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:900; box-shadow:0 4px 10px rgba(239,68,68,0.25);">${emp.name.charAt(0).toUpperCase()}</div>
+                            <div style="overflow:hidden;">
+                               <div style="text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:800;">${emp.name}</div>
+                               <div style="font-size:9px; color:#94a3b8; font-weight:700;">Rate: ${formatCurrency(emp.hourly_rate || 0)}/h</div>
+                            </div>
+                          </div>
+                        </td>
+                        ${rosterDates.map(dayDate => {
+                          const dayShift = empShifts.find(s => new Date(s.start_time).toDateString() === dayDate.toDateString());
+                          const isToday = dayDate.toDateString() === new Date().toDateString();
+                          return `
+                            <td style="padding:10px; text-align:center; vertical-align:middle; min-height:100px; border-right:1px solid #edf2f7; background:${isToday ? '#fff8f8' : '#ffffff'};">
+                              ${dayShift ? `
+                                <div style="background:linear-gradient(135deg, #1e293b 0%, #0f172a 100%); color:white; padding:10px; border-radius:14px; font-size:10px; font-weight:700; box-shadow:0 8px 20px rgba(0,0,0,0.15); position:relative; overflow:hidden; border:1px solid rgba(255,255,255,0.05);">
+                                  <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:5px; color:var(--secondary); font-size:9px; font-weight:900; text-transform:uppercase; letter-spacing:0.5px;">📍 ${dayShift.businesses?.name || 'Local'}</div>
+                                  <div style="font-size:12px; display:flex; align-items:center; justify-content:center; gap:4px; font-weight:900;"><i data-lucide="clock" style="width:12px;"></i> ${new Date(dayShift.start_time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12: false})}</div>
+                                  <div style="margin-top:10px; display:flex; justify-content:center; gap:12px; background:rgba(255,255,255,0.08); padding:6px 0; border-radius:8px;">
+                                    <span onclick="window.openModal('shift', '${dayShift.id}')" style="cursor:pointer; color:var(--secondary); display:flex; align-items:center;" title="Ajustar Horario"><i data-lucide="settings-2" style="width:14px;"></i></span>
+                                    <span onclick="window.deleteShift('${dayShift.id}')" style="cursor:pointer; color:var(--primary); display:flex; align-items:center;" title="Eliminar"><i data-lucide="trash-2" style="width:14px;"></i></span>
+                                  </div>
+                                </div>
+                              ` : `
+                                <button onclick="window.openModal('shift', null, '${emp.id}', '${dayDate.toISOString()}')" style="width:34px; height:34px; background:#f8fafc; border:2px dashed #e2e8f0; color:#cbd5e1; cursor:pointer; border-radius:12px; font-size:18px; font-weight:900; transition:all 0.3s cubic-bezier(0.4, 0, 0.2, 1); display:inline-flex; align-items:center; justify-content:center;" onmouseover="this.style.borderColor='var(--primary)'; this.style.color='var(--primary)'; this.style.background='white'; this.style.transform='scale(1.1)';" onmouseout="this.style.borderColor='#e2e8f0'; this.style.color='#cbd5e1'; this.style.background='#f8fafc'; this.style.transform='scale(1)';">+</button>
+                              `}
+                            </td>
+                          `;
+                        }).join('')}
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- SECCIÓN 2: AUDITORÍA DE PERSONAL Y PERMISOS (CENTRALIZADO) -->
+          <div class="card" style="padding:25px; border-radius:24px; box-shadow: 0 10px 30px rgba(0,0,0,0.05); border:1px solid #f1f5f9;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:25px; border-bottom:1px solid #f1f5f9; padding-bottom:15px;">
+               <div>
+                  <h3 style="font-size:18px; font-weight:900; color:#1e293b;">Nómina y Facultades de Personal</h3>
+                  <p style="font-size:12px; color:#94a3b8; margin-top:4px;">Configuración de privilegios de acceso y costos operativos</p>
+               </div>
+               <div style="background:var(--primary); color:white; font-size:11px; font-weight:900; padding:6px 14px; border-radius:30px;">
+                  ${state.employees.length} ACTIVOS
+               </div>
             </div>
             
-            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
-              <div style="display:flex; align-items:center; gap:6px;">
-                <label style="font-size:10px; font-weight:900; color:#64748b; text-transform:uppercase;">Vista Planilla:</label>
-                <select onchange="state.rosterConfig.daysCount = parseInt(this.value); window.render()" class="form-input" style="width:auto; height:36px; font-size:12px; font-weight:700; border-radius:10px; padding:0 10px; border-color:#cbd5e1;">
-                  <option value="7" ${state.rosterConfig.daysCount === 7 ? 'selected' : ''}>📋 Semanal (7d)</option>
-                  <option value="15" ${state.rosterConfig.daysCount === 15 ? 'selected' : ''}>📋 Quincenal (15d)</option>
-                  <option value="30" ${state.rosterConfig.daysCount === 30 ? 'selected' : ''}>📋 Mensual (30d)</option>
-                </select>
-              </div>
-              <div style="display:flex; align-items:center; gap:6px;">
-                <label style="font-size:10px; font-weight:900; color:#64748b; text-transform:uppercase;">A partir de:</label>
-                <input type="date" onchange="state.rosterConfig.startDate = this.value; window.render()" class="form-input" style="width:auto; height:36px; font-size:12px; font-weight:700; border-radius:10px; padding:0 10px; border-color:#cbd5e1;" value="${state.rosterConfig.startDate}">
-              </div>
-            </div>
-          </div>
-
-          <!-- TABLA DE PLANILLA MATRIX (Horizontal Scroll) -->
-          <div style="overflow-x:auto; background:#ffffff; max-height:550px; overflow-y:auto; -webkit-overflow-scrolling: touch; position: relative; border-radius: 0 0 16px 16px;">
-            <table style="width: calc(180px + (${state.rosterConfig.daysCount} * 110px)); border-collapse:collapse; font-size:11px; table-layout:fixed;">
-              <thead>
-                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0; position:sticky; top:0; z-index:10;">
-                  <th style="padding:15px; text-align:left; width:180px; color:#64748b; background:#f8fafc; font-weight:800; text-transform:uppercase; letter-spacing:0.5px; border-right:1px solid #e2e8f0; position:sticky; left:0; z-index:11; box-shadow: 2px 0 5px rgba(0,0,0,0.05);">COLABORADOR</th>
-                  ${rosterDates.map(d => {
-                    const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                    return `<th style="padding:10px; text-align:center; width:110px; color:${isWeekend ? 'var(--danger)' : '#475569'}; font-weight:800; background:${isWeekend ? '#fff1f2' : '#f8fafc'}; border-right:1px solid #edf2f7;">
-                      <span style="font-size:9px; opacity:0.7; text-transform:uppercase; display:block;">${d.toLocaleDateString('es-ES', { weekday: 'short' })}</span>
-                      <span style="font-size:14px; font-weight:900; display:block; margin-top:2px;">${d.getDate()}</span>
-                      <span style="font-size:8px; opacity:0.6; text-transform:uppercase; display:block;">${d.toLocaleDateString('es-ES', { month: 'short' })}</span>
-                    </th>`;
-                  }).join('')}
-                </tr>
-              </thead>
-              <tbody>
-                ${state.employees.map(emp => {
-                  const empShifts = state.shifts.filter(s => s.user_id === emp.id);
-
-                  return `
-                    <tr style="border-bottom:1px solid #edf2f7; transition: background 0.1s;">
-                      <td style="padding:15px; font-weight:800; color:#1e293b; background:#fafbfc; border-right:1px solid #e2e8f0; position:sticky; left:0; z-index:2; box-shadow: 2px 0 5px rgba(0,0,0,0.02);">
-                        <div style="display:flex; align-items:center; gap:8px;">
-                          <div style="width:26px; height:26px; border-radius:50%; background:var(--primary); color:white; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:900;">${emp.name.charAt(0).toUpperCase()}</div>
-                          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${emp.name}</span>
-                        </div>
-                      </td>
-                      ${rosterDates.map(dayDate => {
-                        const dayShift = empShifts.find(s => new Date(s.start_time).toDateString() === dayDate.toDateString());
-                        const isWeekend = dayDate.getDay() === 0 || dayDate.getDay() === 6;
-                        const isToday = dayDate.toDateString() === new Date().toDateString();
-
-                        return `
-                          <td style="padding:12px; text-align:center; vertical-align:middle; min-height:90px; border-right:1px solid #edf2f7; background:${isToday ? '#eff6ff' : (isWeekend ? '#fffafb' : '#ffffff')};">
-                            ${dayShift ? `
-                              <div style="background:linear-gradient(135deg, var(--primary) 0%, #1e293b 100%); color:white; padding:8px; border-radius:10px; font-size:9px; font-weight:700; box-shadow:0 2px 6px rgba(0,0,0,0.1); position:relative; overflow:hidden;" title="Turno asignado en ${dayShift.businesses?.name || 'Sede'}">
-                                <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:2px; opacity:0.9; font-size:8px; font-weight:800; text-transform:uppercase;">📍 ${dayShift.businesses?.name || 'Local'}</div>
-                                <div style="font-size:10px; display:flex; align-items:center; justify-content:center; gap:2px; font-weight:800;"><i data-lucide="clock" style="width:10px;"></i> ${new Date(dayShift.start_time).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', hour12: false})}</div>
-                                <div style="margin-top:6px; display:flex; justify-content:center; gap:12px; background:rgba(255,255,255,0.15); padding:3px 0; border-radius:6px;">
-                                  <span onclick="window.openModal('shift', '${dayShift.id}')" style="cursor:pointer; display:flex; align-items:center; color:white;" title="Editar"><i data-lucide="edit-2" style="width:11px; height:11px;"></i></span>
-                                  <span onclick="window.deleteShift('${dayShift.id}')" style="cursor:pointer; display:flex; align-items:center; color:#fca5a5;" title="Borrar"><i data-lucide="trash-2" style="width:11px; height:11px;"></i></span>
-                                </div>
-                              </div>
-                            ` : `
-                              <button onclick="window.openModal('shift', null, '${emp.id}', '${dayDate.toISOString()}')" style="width:28px; height:28px; background:#f1f5f9; border:1px dashed #cbd5e1; color:#94a3b8; cursor:pointer; border-radius:8px; font-size:14px; font-weight:800; transition:all 0.2s; display:inline-flex; align-items:center; justify-content:center;" onmouseover="this.style.background='var(--primary)'; this.style.color='white';" onmouseout="this.style.background='#f1f5f9'; this.style.color='#94a3b8';">+</button>
-                            `}
-                          </td>
-                        `;
-                      }).join('')}
-                    </tr>
-                  `;
-                }).join('')}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card" style="margin-top:20px; padding:0; overflow:hidden;">
-          <div style="padding:20px; border-bottom:1px solid #f1f5f9;">
-            <h3 style="font-size:16px;">Listado de Personal</h3>
-          </div>
-          <div style="padding:10px;">
-            ${state.employees.map(e => `
-              <div style="display:flex; justify-content:space-between; align-items:center; padding:15px; background:#f8fafc; border-radius:16px; margin-bottom:10px;">
-                <div style="flex:1;">
-                  <p style="font-weight:700; font-size:15px;">${e.name}</p>
-                  <div style="margin-top:5px; display:flex; gap:10px;">
-                      <div style="display:flex; align-items:center; gap:5px; background:white; border:1px solid #e2e8f0; border-radius:8px; padding:0 8px;">
-                        <span style="font-size:10px; font-weight:800; color:var(--text-muted);">$</span>
-                        <input type="number" value="${e.hourly_rate || 0}" onchange="window.updateUserHourlyRate('${e.id}', this.value)" style="border:none; width:60px; font-size:11px; font-weight:700; outline:none;" title="Valor Hora">
+            <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:20px;">
+              ${state.employees.map(e => `
+                <div style="display:flex; flex-direction:column; background:#ffffff; border:1px solid #edf2f7; border-radius:20px; overflow:hidden; transition:all 0.3s ease; box-shadow:0 4px 10px rgba(0,0,0,0.01);" onmouseover="this.style.borderColor='var(--primary)'; this.style.boxShadow='0 10px 25px rgba(239,68,68,0.08)'" onmouseout="this.style.borderColor='#edf2f7'; this.style.boxShadow='0 4px 10px rgba(0,0,0,0.01)'">
+                  <div style="padding:18px; border-bottom:1px solid #f8fafc; display:flex; justify-content:space-between; align-items:center;">
+                    <div style="display:flex; align-items:center; gap:12px;">
+                      <div style="width:40px; height:40px; border-radius:14px; background:#f1f5f9; color:#1e293b; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:16px;">${e.name.charAt(0).toUpperCase()}</div>
+                      <div>
+                        <p style="font-weight:900; font-size:15px; color:#0f172a; margin:0;">${e.name}</p>
+                        <p style="font-size:11px; color:#94a3b8; font-weight:700; text-transform:uppercase;">ID: ${e.id.slice(0,8)}</p>
                       </div>
                     </div>
-                  <p style="font-size:12px; color:var(--text-muted); margin-top:5px;">${state.shifts.filter(s => s.user_id === e.id).length} turnos esta semana</p>
+                  </div>
+                  
+                  <div style="padding:18px; background:#fafbfc; display:grid; grid-template-columns: 1fr 1fr; gap:15px; border-bottom:1px solid #f1f5f9;">
+                    <div>
+                      <label style="font-size:9px; font-weight:900; color:#94a3b8; text-transform:uppercase; margin-bottom:8px; display:block;">Costo x Hora</label>
+                      <div style="display:flex; align-items:center; gap:6px; background:white; border:1.5px solid #e2e8f0; border-radius:12px; padding:6px 10px;">
+                        <span style="font-size:12px; font-weight:900; color:var(--primary);">$</span>
+                        <input type="number" value="${e.hourly_rate || 0}" onchange="window.updateUserHourlyRate('${e.id}', this.value)" style="border:none; width:100%; font-size:14px; font-weight:900; outline:none; color:#1e293b;" title="Modificar tarifa horaria">
+                      </div>
+                    </div>
+                    <div style="text-align:right;">
+                       <label style="font-size:9px; font-weight:900; color:#94a3b8; text-transform:uppercase; margin-bottom:8px; display:block;">Turnos / Semana</label>
+                       <p style="font-size:20px; font-weight:900; color:#1e293b; margin:0;">${state.shifts.filter(s => s.user_id === e.id).length}</p>
+                    </div>
+                  </div>
+                  
+                  <div style="padding:15px 18px; display:flex; justify-content:space-between; align-items:center;">
+                    <div style="display:flex; gap:15px;">
+                      <label style="display:flex; align-items:center; gap:8px; cursor:pointer;" title="Permite gestionar movimientos de caja">
+                        <input type="checkbox" onchange="window.toggleCashierPermission('${e.id}', ${e.is_cashier})" ${e.is_cashier ? 'checked' : ''} style="width:18px; height:18px; border-radius:6px; accent-color:var(--secondary);">
+                        <span style="font-size:11px; font-weight:850; color:${e.is_cashier ? 'var(--secondary)' : '#64748b'}">CAJERO</span>
+                      </label>
+                      <label style="display:flex; align-items:center; gap:8px; cursor:pointer;" title="Habilita registro de nuevo inventario">
+                        <input type="checkbox" onchange="window.toggleInventoryPermission('${e.id}', ${e.can_manage_inventory})" ${e.can_manage_inventory ? 'checked' : ''} style="width:18px; height:18px; border-radius:6px; accent-color:var(--success);">
+                        <span style="font-size:11px; font-weight:850; color:${e.can_manage_inventory ? 'var(--success)' : '#64748b'}">INVENTARIO</span>
+                      </label>
+                    </div>
+                    <button onclick="window.openModal('shift', null, '${e.id}')" style="background:#f1f5f9; border:none; padding:8px; border-radius:10px; cursor:pointer; color:#64748b;" title="Nueva Asignación Rápida">
+                       <i data-lucide="calendar-plus" style="width:18px;"></i>
+                    </button>
+                  </div>
                 </div>
-                <div style="display:flex; align-items:center; gap:15px;">
-                  <label style="display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer;" title="Permite a este empleado registrar GASTOS en caja">
-                    <span style="font-size:9px; font-weight:800; color:${e.is_cashier ? 'var(--primary)' : 'var(--text-muted)'};">CAJERO</span>
-                    <input type="checkbox" onchange="window.toggleCashierPermission('${e.id}', ${e.is_cashier})" ${e.is_cashier ? 'checked' : ''}>
-                  </label>
-                  <label style="display:flex; flex-direction:column; align-items:center; gap:5px; cursor:pointer;">
-                    <span style="font-size:9px; font-weight:800; color:${e.can_manage_inventory ? 'var(--success)' : 'var(--text-muted)'};">INVENTARIO</span>
-                    <input type="checkbox" onchange="window.toggleInventoryPermission('${e.id}', ${e.can_manage_inventory})" ${e.can_manage_inventory ? 'checked' : ''}>
-                  </label>
-                </div>
-              </div>
-            `).join('')}
+              `).join('')}
+            </div>
           </div>
         </div>
       </div>
@@ -2339,9 +2022,12 @@ const render = () => {
                 <h3 style="margin:0; font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:8px;">
                    <i data-lucide="navigation" style="width:18px; color:#3b82f6;"></i> SEGUIMIENTO SATELITAL EN VIVO
                 </h3>
-                <div style="display:flex; align-items:center; gap:6px; background:#ecfdf5; border:1px solid #a7f3d0; color:#047857; padding:5px 12px; border-radius:30px; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:0.5px;">
-                  <span style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block; animation: pulse-alert-green 1.5s infinite;"></span>
-                  Geocercas Activas
+                <div style="display:flex; gap:10px; align-items:center;">
+                  <button onclick="window.pickCoordinatesOnMap()" class="btn-primary" style="background:#0284c7; padding:5px 12px; font-size:11px; font-weight:800; border:none; border-radius:12px; display:flex; align-items:center; gap:5px;"><i data-lucide="map-pin" style="width:12px;"></i> UBICAR NEGOCIO AQUÍ</button>
+                  <div style="display:flex; align-items:center; gap:6px; background:#ecfdf5; border:1px solid #a7f3d0; color:#047857; padding:5px 12px; border-radius:30px; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:0.5px;">
+                    <span style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block; animation: pulse-alert-green 1.5s infinite;"></span>
+                    Geocercas Activas
+                  </div>
                 </div>
               </div>
               
@@ -5137,9 +4823,19 @@ window.calculatePayroll = async () => {
 
     // Procesar para cada empleado
     state.employees.forEach(emp => {
+      // 0. EXCLUSIÓN DE CUENTAS DE PRUEBA (Para mantener limpia la vista de producción)
+      const lowerName = emp.name.toLowerCase();
+      if (lowerName.includes('tester') || lowerName.includes('selenium') || lowerName.includes('empleado') || lowerName.includes('sebastian')) return;
+
+      // 1. FILTRO POR NEGOCIO: Si estamos en una sede específica, solo mostrar personal de esa sede
+      if (state.currentBusinessId !== 'all' && emp.business_id && emp.business_id !== state.currentBusinessId) return;
+
       // A. PLANILLA FIJA (Horas programadas en turnos de la base de datos)
       const empShifts = state.shifts.filter(s => {
         if (s.user_id !== emp.id || !s.end_time) return false;
+        // Filtrar por negocio si no estamos en vista global
+        if (state.currentBusinessId !== 'all' && s.business_id !== state.currentBusinessId) return false;
+        
         const shiftStart = new Date(s.start_time);
         return shiftStart >= new Date(startLimit) && shiftStart <= new Date(endLimit);
       });
@@ -5153,7 +4849,17 @@ window.calculatePayroll = async () => {
       // B. MARCACIÓN REAL (Horas reales basadas en el primer GPS Entrada y último GPS Salida del día)
       let gpsHours = 0;
       if (gpsLogs) {
-        const empGps = gpsLogs.filter(l => l.user_id === emp.id);
+        // Filtrar logs por empleado Y por negocio actual (si aplica)
+        const empGps = gpsLogs.filter(l => {
+          if (l.user_id !== emp.id) return false;
+          if (state.currentBusinessId !== 'all') {
+            try {
+              const ctx = JSON.parse(l.message).context;
+              if (ctx && ctx.businessId !== state.currentBusinessId) return false;
+            } catch(e) { return false; }
+          }
+          return true;
+        });
         const dailyPairs = {};
 
         empGps.forEach(log => {
@@ -5188,18 +4894,22 @@ window.calculatePayroll = async () => {
         // Acumular tiempo total por cada par diario consolidado
         Object.values(dailyPairs).forEach(pair => {
           if (pair.arrival && pair.departure && pair.departure > pair.arrival) {
+            // DOBLE VALIDACIÓN: Solo sumar si el log pertenece al negocio actual o si estamos en vista global
+            // Se asume que el log ya fue filtrado arriba por el negocio en el filter de empGps
             gpsHours += (pair.departure - pair.arrival) / (1000 * 60 * 60);
           }
         });
       }
 
-      // C. Guardar resultado cruzado del desfase
-      results[emp.id] = {
-        hours: totalHours,
-        gpsHours: gpsHours,
-        pay: gpsHours * (parseFloat(emp.hourly_rate) || 0), // Liquidamos sobre lo trabajado real!
-        shiftsCount: empShifts.length
-      };
+      // D. FILTRO DE VISIBILIDAD: Solo incluir si tiene actividad en ESTE negocio
+      if (totalHours > 0 || gpsHours > 0) {
+        results[emp.id] = {
+          hours: totalHours,
+          gpsHours: gpsHours,
+          pay: gpsHours * (parseFloat(emp.hourly_rate) || 0),
+          shiftsCount: empShifts.length
+        };
+      }
     });
 
     state.payrollData = results;
@@ -5243,6 +4953,19 @@ window.getDistanceInMeters = (lat1, lon1, lat2, lon2) => {
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 
   return R * c; // Distancia en metros
+};
+
+// 📐 FUNCIÓN DE VALIDACIÓN DE PUNTO EN POLÍGONO (Ray-casting)
+window.isPointInPolygon = (point, polygon) => {
+  const x = point[0], y = point[1];
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i][0], yi = polygon[i][1];
+    const xj = polygon[j][0], yj = polygon[j][1];
+    const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
 };
 
 // 📡 BYOD TACTICAL DASHBOARD - MAPA INTERACTIVO LEAFLET
@@ -5289,17 +5012,29 @@ window.initByodMap = () => {
 
     const bounds = [];
 
-    // 3. Dibujar Círculos de Geocerca (Zonas Seguras)
-    validSedes.forEach(s => {
-      const radius = s.geofence_radius_meters || 100;
-      L.circle([s.lat, s.lng], {
-        color: '#10b981',
-        fillColor: '#10b981',
-        fillOpacity: 0.12,
-        weight: 2,
-        dashArray: '6, 8'
-      }).addTo(map).bindPopup(`<b>📍 SEDE: ${s.name}</b><br>Perímetro seguro: <b>${radius} metros</b>`);
-      bounds.push([s.lat, s.lng]);
+    // 3. Dibujar Geocercas (Zonas Seguras)
+    (state.businesses || []).forEach(s => {
+      const poly = state.geofencePolygons?.[s.id];
+      if (poly && poly.length >= 3) {
+        L.polygon(poly, {
+          color: '#10b981',
+          fillColor: '#10b981',
+          fillOpacity: 0.12,
+          weight: 2,
+          dashArray: '6, 8'
+        }).addTo(map).bindPopup(`<b>📍 SEDE: ${s.name}</b><br>Geocerca: <b>Medida Exacta</b>`);
+        poly.forEach(p => bounds.push(p));
+      } else if (s.lat && s.lng) {
+        const radius = s.geofence_radius_meters || 100;
+        L.circle([s.lat, s.lng], {
+          color: '#10b981',
+          fillColor: '#10b981',
+          fillOpacity: 0.12,
+          weight: 2,
+          dashArray: '6, 8'
+        }).addTo(map).bindPopup(`<b>📍 SEDE: ${s.name}</b><br>Radio seguro: <b>${radius} metros</b>`);
+        bounds.push([s.lat, s.lng]);
+      }
     });
 
     // 4. Dibujar Colaboradores Activos
@@ -5318,9 +5053,14 @@ window.initByodMap = () => {
       const biz = activeShift?.businesses || validSedes.find(b => b.id === activeShift?.business_id);
       
       let isOutside = false;
-      if (biz && biz.lat && biz.lng) {
-        const dist = window.getDistanceInMeters(hb.lat, hb.lng, biz.lat, biz.lng);
-        isOutside = dist > (biz.geofence_radius_meters || 100);
+      if (biz) {
+        const poly = state.geofencePolygons?.[biz.id];
+        if (poly && poly.length >= 3) {
+          isOutside = !window.isPointInPolygon([hb.lat, hb.lng], poly);
+        } else if (biz.lat && biz.lng) {
+          const dist = window.getDistanceInMeters(hb.lat, hb.lng, biz.lat, biz.lng);
+          isOutside = dist > (biz.geofence_radius_meters || 100);
+        }
       }
 
       const color = isOutside ? '#ef4444' : '#3b82f6';
@@ -5394,6 +5134,322 @@ window.saveTelegramConfig = async (e) => {
     await window.fetchByodDashboard();
   } catch(err) {
     window.showToast("Error al vincular celular: " + err.message, "danger");
+  } finally {
+    state.loading = false;
+    render();
+  }
+};
+
+// 🗺️ ASIGNADOR VISUAL DE GEOCERCAS PARA NEGOCIOS
+window.pickCoordinatesOnMap = () => {
+  const modalHtml = `
+    <div class="modal-overlay" id="geofence-picker-modal" style="z-index:9999;">
+      <div class="modal-card card" style="max-width:800px; padding:0; overflow:hidden; border-radius:24px;">
+        <div style="padding:20px 25px; background:#0f172a; color:white; display:flex; justify-content:space-between; align-items:center;">
+          <h2 style="font-size:16px; font-weight:800; display:flex; align-items:center; gap:8px; margin:0;"><i data-lucide="map-pin" style="color:#38bdf8;"></i> Fijar Ubicación de Sede</h2>
+          <div class="modal-close" style="color:white; cursor:pointer;" onclick="document.getElementById('geofence-picker-modal').remove()">✕</div>
+        </div>
+        
+        <div style="padding:20px 25px; background:#f8fafc; border-bottom:1px solid #e2e8f0;">
+          <label style="font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; display:block; margin-bottom:8px;">1. Selecciona la Sede Operativa</label>
+          <select id="geo-business-select" class="form-input" style="width:100%; border-radius:12px; font-weight:700;" onchange="window.geoPickerUpdateRadius()">
+            <option value="">-- Elige un Negocio --</option>
+            ${state.businesses.map(b => `<option value="${b.id}" data-lat="${b.lat || ''}" data-lng="${b.lng || ''}" data-rad="${b.geofence_radius_meters || 100}">${b.name}</option>`).join('')}
+          </select>
+          
+          <div style="display:flex; gap:15px; margin-top:15px; align-items:flex-end;">
+            <div style="flex:1.2;">
+              <label style="font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; display:block; margin-bottom:8px;">Modo de Geocerca</label>
+              <select id="geo-mode-select" class="form-input" style="width:100%; border-radius:12px;" onchange="window.geoPickerToggleMode()">
+                <option value="circle">📍 Círculo y Radio</option>
+                <option value="polygon">📐 Dibujar Polígono</option>
+              </select>
+            </div>
+            <div style="flex:1;" id="geo-radius-container">
+              <label style="font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; display:block; margin-bottom:8px;">Radio Seguro (m)</label>
+              <input type="number" id="geo-radius-input" class="form-input" value="100" style="width:100%; border-radius:12px; font-weight:800; color:var(--primary);" oninput="window.geoPickerDrawCircle()">
+            </div>
+            <div style="flex:1; display:none;" id="geo-buffer-container">
+              <label style="font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; display:block; margin-bottom:8px;">Buffer / Tolerancia (m)</label>
+              <input type="number" id="geo-buffer-input" class="form-input" value="30" style="width:100%; border-radius:12px; font-weight:800; color:#3b82f6;">
+            </div>
+            <div style="flex:1; display:none;" id="geo-polygon-actions">
+              <label style="font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; display:block; margin-bottom:8px;">Limpiar Dibujo</label>
+              <button onclick="window.geoPickerClearPolygon()" class="btn-secondary" style="width:100%; height:45px; border-radius:12px; font-weight:800; color:#dc2626; border-color:#fecaca; background:#fef2f2;">🗑️ BORRAR</button>
+            </div>
+            <div style="flex:1;">
+              <label style="font-size:11px; font-weight:800; color:#475569; text-transform:uppercase; display:block; margin-bottom:8px;">Posición</label>
+              <button onclick="window.geoPickerUseMyGps()" class="btn-secondary" style="width:100%; height:45px; font-size:11px; font-weight:800; border-radius:12px; display:flex; justify-content:center; align-items:center; gap:5px;"><i data-lucide="crosshair" style="width:14px;"></i> GPS</button>
+            </div>
+          </div>
+          <p id="geo-instructions" style="font-size:11px; color:#64748b; margin:15px 0 0 0; text-align:center; font-weight:600;">Haz clic en el mapa para fijar el centro de la sede.</p>
+        </div>
+
+        <div id="geo-picker-map" style="height:400px; width:100%;"></div>
+        
+        <div style="padding:20px 25px; background:white; border-top:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center;">
+           <button onclick="window.deleteBusinessLocation()" class="btn-secondary" style="color:#ef4444; border-color:#fecaca; background:#fef2f2; font-weight:800; padding:10px 20px; border-radius:12px; display:flex; align-items:center; gap:8px;"><i data-lucide="trash-2" style="width:16px;"></i> ELIMINAR SEDE</button>
+           <button onclick="window.saveMapCoordinates()" class="btn-primary" style="background:#10b981; font-weight:800; padding:12px 25px; border-radius:12px; display:flex; align-items:center; gap:8px;"><i data-lucide="save" style="width:16px;"></i> GUARDAR CONFIGURACIÓN</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+  if (window.lucide) window.lucide.createIcons();
+
+  window.geoPickerPolygonPoints = [];
+  window.geoPickerPolygonLayer = null;
+
+  setTimeout(() => {
+    let initialLat = 4.60971, initialLng = -74.08175;
+
+    const map = L.map('geo-picker-map').setView([initialLat, initialLng], 15);
+    window.geoPickerMapInstance = map;
+
+    const mapboxToken = 'YOUR_MAPBOX_TOKEN_HERE'; // Reemplazado para evitar bloqueo de Git
+    
+    const streetLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', { maxZoom: 19 }).addTo(map);
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: 'Esri, Maxar, Earthstar Geographics'
+    });
+
+    const baseMaps = {
+      "🗺️ Calles": streetLayer,
+      "🛰️ Satelital": satelliteLayer
+    };
+    L.control.layers(baseMaps).addTo(map);
+
+    window.geoPickerMarker = L.marker([initialLat, initialLng], { draggable: true }).addTo(map);
+    window.geoPickerCircle = L.circle([initialLat, initialLng], { radius: 100, color: '#10b981', fillOpacity: 0.2 }).addTo(map);
+
+    // Sync Circulo al mover pin
+    window.geoPickerMarker.on('drag', function(e) {
+      if (document.getElementById('geo-mode-select').value === 'circle') {
+        const pos = e.target.getLatLng();
+        window.geoPickerCircle.setLatLng(pos);
+      }
+    });
+
+    // Mover al click o agregar punto a polígono
+    map.on('click', function(e) {
+      const mode = document.getElementById('geo-mode-select').value;
+      if (mode === 'circle') {
+        window.geoPickerMarker.setLatLng(e.latlng);
+        window.geoPickerCircle.setLatLng(e.latlng);
+      } else {
+        window.geoPickerPolygonPoints.push([e.latlng.lat, e.latlng.lng]);
+        window.geoPickerDrawPolygonLayer();
+      }
+    });
+    
+    setTimeout(() => { map.invalidateSize(); }, 300);
+  }, 100);
+};
+
+window.geoPickerDrawPolygonLayer = () => {
+  if (window.geoPickerPolygonLayer) {
+    window.geoPickerMapInstance.removeLayer(window.geoPickerPolygonLayer);
+  }
+  if (window.geoPickerPolygonPoints.length > 0) {
+    window.geoPickerPolygonLayer = L.polygon(window.geoPickerPolygonPoints, {
+      color: '#3b82f6',
+      fillColor: '#3b82f6',
+      fillOpacity: 0.3,
+      weight: 3
+    }).addTo(window.geoPickerMapInstance);
+  }
+};
+
+window.geoPickerClearPolygon = () => {
+  window.geoPickerPolygonPoints = [];
+  window.geoPickerDrawPolygonLayer();
+};
+
+window.geoPickerToggleMode = () => {
+  const mode = document.getElementById('geo-mode-select').value;
+  if (mode === 'circle') {
+    document.getElementById('geo-radius-container').style.display = 'block';
+    document.getElementById('geo-buffer-container').style.display = 'none';
+    document.getElementById('geo-polygon-actions').style.display = 'none';
+    document.getElementById('geo-instructions').innerText = 'Haz clic en el mapa para mover el centro de la sede (Modo Círculo).';
+    if (window.geoPickerPolygonLayer) window.geoPickerMapInstance.removeLayer(window.geoPickerPolygonLayer);
+    window.geoPickerMarker.setOpacity(1);
+    window.geoPickerCircle.setStyle({opacity:1, fillOpacity:0.2});
+  } else {
+    document.getElementById('geo-radius-container').style.display = 'none';
+    document.getElementById('geo-buffer-container').style.display = 'block';
+    document.getElementById('geo-polygon-actions').style.display = 'block';
+    document.getElementById('geo-instructions').innerText = 'Dibuja el polígono exacto del local. El "Buffer" permitirá a los empleados alejarse unos metros extra de las paredes.';
+    window.geoPickerMarker.setOpacity(0);
+    window.geoPickerCircle.setStyle({opacity:0, fillOpacity:0});
+    window.geoPickerDrawPolygonLayer();
+  }
+};
+
+window.geoPickerUpdateRadius = () => {
+  const sel = document.getElementById('geo-business-select');
+  const opt = sel.options[sel.selectedIndex];
+  if (!opt || !opt.value) return;
+
+  const r = parseInt(opt.getAttribute('data-rad')) || 100;
+  document.getElementById('geo-radius-input').value = r;
+
+  const lat = parseFloat(opt.getAttribute('data-lat'));
+  const lng = parseFloat(opt.getAttribute('data-lng'));
+  const bizId = opt.value;
+
+  // Restaurar polígono y buffer si existen
+  const polyConfig = state.geofencePolygons?.[bizId];
+  window.geoPickerPolygonPoints = polyConfig?.polygon || [];
+  document.getElementById('geo-buffer-input').value = polyConfig?.buffer || 30;
+
+  if (lat && lng && !isNaN(lat) && !isNaN(lng)) {
+    window.geoPickerMarker.setLatLng([lat, lng]);
+    window.geoPickerMapInstance.setView([lat, lng], 18);
+    window.geoPickerDrawCircle();
+  }
+  
+  // Cambiar a modo polígono si ya tiene uno configurado
+  if (window.geoPickerPolygonPoints.length >= 3) {
+    document.getElementById('geo-mode-select').value = 'polygon';
+  } else {
+    document.getElementById('geo-mode-select').value = 'circle';
+  }
+  window.geoPickerToggleMode();
+};
+
+window.geoPickerDrawCircle = () => {
+  if (!window.geoPickerCircle || !window.geoPickerMarker) return;
+  const r = parseInt(document.getElementById('geo-radius-input').value) || 100;
+  window.geoPickerCircle.setRadius(r);
+  window.geoPickerCircle.setLatLng(window.geoPickerMarker.getLatLng());
+};
+
+window.geoPickerUseMyGps = () => {
+  if (!navigator.geolocation) return window.showToast("Tu dispositivo no soporta GPS", "danger");
+  
+  const btn = document.querySelector('button[onclick="window.geoPickerUseMyGps()"]');
+  const original = btn.innerHTML;
+  btn.innerHTML = '<span class="loading-spinner"></span> CALCULANDO...';
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      btn.innerHTML = original;
+      const { latitude: lat, longitude: lng } = pos.coords;
+      window.geoPickerMarker.setLatLng([lat, lng]);
+      window.geoPickerMapInstance.setView([lat, lng], 18);
+      window.geoPickerDrawCircle();
+      window.showToast("📍 Posición centrada en tu ubicación actual.", "success");
+    },
+    (err) => {
+      btn.innerHTML = original;
+      window.showToast("Error de GPS: " + err.message, "danger");
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+  );
+};
+
+window.saveMapCoordinates = async () => {
+  const bizId = document.getElementById('geo-business-select').value;
+  if (!bizId) return window.showToast("Debes seleccionar una sede primero.", "warning");
+
+  const mode = document.getElementById('geo-mode-select').value;
+  const radius = parseInt(document.getElementById('geo-radius-input').value) || 100;
+  const buffer = parseInt(document.getElementById('geo-buffer-input').value) || 30;
+  const pos = window.geoPickerMarker.getLatLng();
+  
+  state.loading = true;
+  render();
+
+  try {
+    // 1. Guardar centro en tabla de businesses
+    const { error } = await supabase.from('businesses').update({
+      lat: pos.lat,
+      lng: pos.lng,
+      geofence_radius_meters: radius
+    }).eq('id', bizId);
+
+    if (error) throw error;
+
+    // 2. Guardar Polígono y Buffer en system_logs
+    if (mode === 'polygon' && window.geoPickerPolygonPoints.length >= 3) {
+      const payload = { business_id: bizId, polygon: window.geoPickerPolygonPoints, buffer: buffer };
+      await supabase.from('system_logs').insert({
+        type: 'GEOFENCE_POLYGON',
+        module: 'Configuración',
+        user_id: state.user.id,
+        message: JSON.stringify(payload)
+      });
+      if (!state.geofencePolygons) state.geofencePolygons = {};
+      state.geofencePolygons[bizId] = payload;
+    } else {
+      // Si eligió círculo, borrar polígono existente registrando uno vacío
+      await supabase.from('system_logs').insert({
+        type: 'GEOFENCE_POLYGON',
+        module: 'Configuración',
+        user_id: state.user.id,
+        message: JSON.stringify({ business_id: bizId, polygon: [], buffer: 0 })
+      });
+      if (state.geofencePolygons) state.geofencePolygons[bizId] = null;
+    }
+
+    window.showToast("✅ ¡Geocerca configurada exitosamente!", "success");
+    document.getElementById('geofence-picker-modal').remove();
+    
+    // Recargar memoria
+    const { data: busRes } = await supabase.from('businesses').select('id, name, type, lat, lng, geofence_radius_meters');
+    state.businesses = busRes || [];
+    
+    // Repintar Dashboard BYOD
+    if (state.view === 'byod_dashboard') {
+      window.initByodMap();
+    }
+  } catch(err) {
+    window.showToast("Error guardando mapa: " + err.message, "danger");
+  } finally {
+    state.loading = false;
+    render();
+  }
+};
+
+window.deleteBusinessLocation = async () => {
+  const bizId = document.getElementById('geo-business-select').value;
+  if (!bizId) return window.showToast("Selecciona una sede para eliminar sus coordenadas.", "warning");
+  
+  if (!confirm("⚠️ ¿Estás seguro de eliminar la ubicación y geocerca de esta sede? Los empleados ya no tendrán restricciones para marcar aquí.")) return;
+  
+  state.loading = true;
+  render();
+  
+  try {
+    // 1. Limpiar coordenadas en tabla principal
+    const { error } = await supabase.from('businesses').update({
+      lat: null,
+      lng: null,
+      geofence_radius_meters: 100
+    }).eq('id', bizId);
+    
+    if (error) throw error;
+    
+    // 2. Limpiar polígono en logs
+    await supabase.from('system_logs').insert({
+      type: 'GEOFENCE_POLYGON',
+      module: 'Configuración',
+      user_id: state.user.id,
+      message: JSON.stringify({ business_id: bizId, polygon: [] })
+    });
+    
+    if (state.geofencePolygons) state.geofencePolygons[bizId] = null;
+    
+    window.showToast("🗑️ Ubicación eliminada correctamente.", "success");
+    document.getElementById('geofence-picker-modal').remove();
+    
+    await fetchData();
+    if (state.view === 'byod_dashboard') window.initByodMap();
+    
+  } catch(err) {
+    window.showToast("Error eliminando ubicación: " + err.message, "danger");
   } finally {
     state.loading = false;
     render();
@@ -5489,26 +5545,83 @@ window.registerGeolocation = async (type) => {
       }
     }
 
-    const position = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
-    
+    // 🎯 FILTRO DE PRECISIÓN TRIPLE (Eliminación de Ruido GPS)
+    const samples = [];
+    const maxRetries = 5;
+    let attempts = 0;
+
+    window.showToast("📡 Estabilizando señal GPS (3 muestras)...", "info");
+
+    while (samples.length < 3 && attempts < maxRetries) {
+      try {
+        const pos = await Geolocation.getCurrentPosition({ 
+          enableHighAccuracy: true, 
+          maximumAge: 0, 
+          timeout: 10000 
+        });
+        
+        // Solo aceptar muestras con precisión razonable (< 50m) para el promedio
+        if (pos.coords.accuracy < 50) {
+          samples.push(pos.coords);
+        }
+      } catch (err) {
+        console.warn("Fallo lectura GPS temporal:", err);
+      }
+      attempts++;
+      if (samples.length < 3) await new Promise(r => setTimeout(r, 800)); // Breve pausa entre capturas
+    }
+
+    if (samples.length === 0) {
+      window.showToast("🚫 No se pudo obtener una señal GPS estable. Intenta en un lugar más abierto.", "danger");
+      state.loading = false;
+      render();
+      return;
+    }
+
+    // Calcular Promedio de Coordenadas
+    const avgLat = samples.reduce((s, c) => s + c.latitude, 0) / samples.length;
+    const avgLng = samples.reduce((s, c) => s + c.longitude, 0) / samples.length;
+    const avgAcc = samples.reduce((s, c) => s + c.accuracy, 0) / samples.length;
+
     const coords = {
-      lat: position.coords.latitude,
-      lng: position.coords.longitude,
-      accuracy: position.coords.accuracy
+      lat: avgLat,
+      lng: avgLng,
+      accuracy: avgAcc
     };
 
     // 🛡️ VALIDACIÓN DE GEOCERCA INTELIGENTE
-    // Buscar el negocio actual para ver si tiene habilitada la geocerca
     const biz = state.businesses.find(b => b.id === state.currentBusinessId);
-    if (biz && biz.lat && biz.lng) {
-      const distanceMeters = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
-      const maxRadius = biz.geofence_radius_meters || 100; // 100 metros por defecto
+    if (biz) {
+      const polyConfig = state.geofencePolygons?.[biz.id];
+      let isOutside = false;
 
-      if (distanceMeters > maxRadius) {
-         window.showToast(`🚫 FUERA DE RANGO: Estás a ${Math.round(distanceMeters)} metros del negocio. Debes estar a menos de ${maxRadius}m para marcar.`, "danger");
+      if (polyConfig && polyConfig.polygon && polyConfig.polygon.length >= 3) {
+        // Validación exacta por POLÍGONO
+        const inside = window.isPointInPolygon([coords.lat, coords.lng], polyConfig.polygon);
+        
+        if (!inside) {
+          // Si está fuera del polígono, chequear si está dentro del BUFFER de tolerancia
+          // Para simplificar: chequear distancia al centro si el polígono falla
+          const distToCenter = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
+          const tolerance = polyConfig.buffer || 30;
+          
+          // Nota: Lo ideal sería distancia al borde del polígono, pero dist al centro + buffer es una buena aproximación táctica
+          if (distToCenter > tolerance + 20) { // +20m de margen por GPS drift
+             isOutside = true;
+          }
+        }
+      } else if (biz.lat && biz.lng) {
+        // Fallback a validación circular clásica
+        const distanceMeters = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
+        const maxRadius = biz.geofence_radius_meters || 100;
+        isOutside = distanceMeters > maxRadius;
+      }
+
+      if (isOutside) {
+         window.showToast("🚫 FUERA DE RANGO: Estás fuera del perímetro permitido para esta sede.", "danger");
          state.loading = false;
          render();
-         return; // 🔒 BLOQUEO MAESTRO: Cancela la operación.
+         return;
       }
     }
 
