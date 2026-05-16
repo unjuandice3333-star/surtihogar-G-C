@@ -587,7 +587,7 @@ window.saveShift = async (e) => {
 };
 
 window.deleteShift = async (id) => {
-  if (!confirm("Â¿Estás seguro de eliminar este turno?")) return;
+  if (!confirm("¿Estás seguro de eliminar este turno?")) return;
   try {
     const { error } = await supabase.from('shifts').delete().eq('id', id);
     if (error) throw error;
@@ -596,6 +596,28 @@ window.deleteShift = async (id) => {
   } catch (err) {
     console.error(err);
     window.showToast("Error al eliminar: " + err.message, "danger");
+  }
+};
+
+window.deleteEmployee = async (id, name) => {
+  if (!confirm(`¿Estás SEGURO de eliminar al colaborador ${name}?\n\nEsto borrará su perfil permanentemente.`)) return;
+  if (!confirm(`⚠️ ADVERTENCIA FINAL: Esta acción NO se puede deshacer. ¿Proceder?`)) return;
+
+  try {
+    state.loading = true;
+    render();
+    
+    const { error } = await supabase.from('users').delete().eq('id', id);
+    if (error) throw error;
+    
+    window.showToast(`✅ Colaborador ${name} eliminado con éxito.`, "success");
+    await fetchData();
+  } catch (err) {
+    console.error(err);
+    window.showToast("Error al eliminar colaborador: " + err.message, "danger");
+  } finally {
+    state.loading = false;
+    render();
   }
 };
 
@@ -1387,7 +1409,6 @@ const render = () => {
           </div>
         </div>
         <div class="header-actions">
-          <button onclick="window.openModal('shift')" class="btn-primary" style="padding:10px 20px; font-size:12px; display:flex; align-items:center; gap:6px;"><i data-lucide="plus-circle" style="width:14px;"></i> ASIGNAR TURNO</button>
           <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px; margin-left:10px;">VOLVER</button>
         </div>
       </header>
@@ -1530,9 +1551,11 @@ const render = () => {
                         <span style="font-size:11px; font-weight:850; color:${e.can_manage_inventory ? 'var(--success)' : '#64748b'}">INVENTARIO</span>
                       </label>
                     </div>
-                    <button onclick="window.openModal('shift', null, '${e.id}')" style="background:#f1f5f9; border:none; padding:8px; border-radius:10px; cursor:pointer; color:#64748b;" title="Nueva Asignación Rápida">
-                       <i data-lucide="calendar-plus" style="width:18px;"></i>
-                    </button>
+                    <div style="display:flex; gap:12px;">
+                      <button onclick="window.deleteEmployee('${e.id}', '${e.name}')" style="background:#fef2f2; border:1px solid #fee2e2; padding:8px; border-radius:10px; cursor:pointer; color:var(--danger);" title="Eliminar Colaborador">
+                         <i data-lucide="user-minus" style="width:18px;"></i>
+                      </button>
+                    </div>
                   </div>
                 </div>
               `).join('')}
