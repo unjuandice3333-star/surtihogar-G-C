@@ -630,8 +630,8 @@ window.handleLogin = async (e) => {
     btn.disabled = true;
     btn.innerHTML = '<span class="loading-spinner"></span> ENTRANDO...';
     
-    const email = e.target[0].value;
-    const password = e.target[1].value;
+    const email = e.target.querySelector('input[type="email"]').value;
+    const password = e.target.querySelector('input[type="password"]').value;
     
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) { 
@@ -684,10 +684,17 @@ window.handleRegister = async (e) => {
     btn.disabled = true;
     btn.innerHTML = '<span class="loading-spinner"></span> REGISTRANDO...';
 
-    const name = e.target[0].value;
-    const email = e.target[1].value;
-    const password = e.target[2].value;
-    const busId = e.target[3].value;
+    const name = e.target.querySelector('input[placeholder="Nombre"]').value;
+    const email = e.target.querySelector('input[placeholder="Email"]').value;
+    const password = e.target.querySelector('input[type="password"]').value;
+    const busId = e.target.querySelector('select').value;
+    
+    if (!busId) {
+      state.authError = "Debes seleccionar un negocio para registrarte.";
+      state.loading = false;
+      render();
+      return;
+    }
     
     const { error } = await supabase.auth.signUp({ 
       email, password, options: { data: { name, business_id: busId } }
@@ -825,7 +832,7 @@ const render = () => {
             </button>
           </div>
 
-          <select class="form-input" style="margin-bottom:12px;">
+          <select class="form-input" style="margin-bottom:12px;" required>
             <option value="" disabled selected>Selecciona tu Negocio...</option>
             ${state.businesses
               .filter(b => !TEST_BUSINESSES.includes(b.name) && !RENTAL_BUSINESSES.includes(b.name))
