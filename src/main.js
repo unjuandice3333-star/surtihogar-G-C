@@ -5594,20 +5594,24 @@ window.registerGeolocation = async (type) => {
       }
     }
 
-    const permissions = await Geolocation.checkPermissions();
-    if (permissions.location !== 'granted') {
-      const request = await Geolocation.requestPermissions();
-      if (request.location !== 'granted') {
-        window.showToast("Permiso de GPS denegado. Es necesario para marcar.", "danger");
-        state.loading = false;
-        render();
-        return;
+    try {
+      const permissions = await Geolocation.checkPermissions();
+      if (permissions.location !== 'granted') {
+        const request = await Geolocation.requestPermissions();
+        if (request.location !== 'granted') {
+          window.showToast("Permiso de GPS denegado. Es necesario para marcar.", "danger");
+          state.loading = false;
+          render();
+          return;
+        }
       }
+    } catch (permErr) {
+      console.warn("[GPS] Fallo comprobación de permisos, intentando de todas formas:", permErr);
     }
 
-    // 🎯 FILTRO DE PRECISIÓN TRIPLE (Eliminación de Ruido GPS)
+    // 🎯 FILTRO DE PRECISIÓN TRIPLE CON FALLBACK (Eliminación de Ruido GPS)
     const samples = [];
-    const maxRetries = 5;
+    const maxRetries = 6;
     let attempts = 0;
 
     window.showToast("📡 Estabilizando señal GPS (3 muestras)...", "info");
@@ -5617,22 +5621,40 @@ window.registerGeolocation = async (type) => {
         const pos = await Geolocation.getCurrentPosition({ 
           enableHighAccuracy: true, 
           maximumAge: 0, 
-          timeout: 10000 
+          timeout: 5000 
         });
         
-        // Solo aceptar muestras con precisión razonable (< 50m) para el promedio
-        if (pos.coords.accuracy < 50) {
+        // Aceptar muestras con precisión razonable (< 150m) para mayor flexibilidad
+        if (pos.coords.accuracy < 150) {
           samples.push(pos.coords);
+        } else {
+          console.warn("[GPS] Muestra ignorada por baja precisión:", pos.coords.accuracy);
         }
       } catch (err) {
-        console.warn("Fallo lectura GPS temporal:", err);
+        console.warn("[GPS] Fallo de lectura temporal:", err);
       }
       attempts++;
-      if (samples.length < 3) await new Promise(r => setTimeout(r, 800)); // Breve pausa entre capturas
+      if (samples.length < 3) await new Promise(r => setTimeout(r, 600)); // Pausa más corta
+    }
+
+    // FALLBACK DE SEGURIDAD: Si no pudimos recolectar 3 muestras de alta precisión, pero tenemos al menos una lectura
+    if (samples.length === 0) {
+      window.showToast("🔄 Buscando señal GPS alternativa...", "info");
+      try {
+        // Intentar lectura rápida usando el proveedor de red/Wi-Fi (sin exigir alta precisión de satélite)
+        const pos = await Geolocation.getCurrentPosition({ 
+          enableHighAccuracy: false, 
+          maximumAge: 10000, 
+          timeout: 5000 
+        });
+        samples.push(pos.coords);
+      } catch (err) {
+        console.error("[GPS] Fallo definitivo obteniendo ubicación:", err);
+      }
     }
 
     if (samples.length === 0) {
-      window.showToast("🚫 No se pudo obtener una señal GPS estable. Intenta en un lugar más abierto.", "danger");
+      window.showToast("🚫 No se pudo obtener una señal GPS estable. Revisa si tienes el GPS activo e intenta de nuevo.", "danger");
       state.loading = false;
       render();
       return;
