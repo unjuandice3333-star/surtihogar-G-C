@@ -1161,30 +1161,133 @@ const render = () => {
             </div>
           </div>
 
-          <!-- VENTAS POR COLABORADOR -->
-          <div class="card">
-            <h3 style="font-size:16px; margin-bottom:15px; display:flex; align-items:center; gap:8px;"><i data-lucide="users" style="color:var(--primary); width:18px;"></i> Ventas por COLABORADOR</h3>
-            <div style="display:flex; flex-direction:column; gap:10px;">
+          <!-- VENTAS POR COLABORADOR (Leaderboard Interactivo v1.8.0) -->
+          <div class="card" style="box-shadow: 0 4px 15px rgba(0,0,0,0.02); border: 1px solid rgba(0,0,0,0.05); overflow:hidden;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:8px; border-bottom:1px solid #f1f5f9; padding-bottom:12px;">
+              <h3 style="font-size:15px; font-weight:800; margin:0; display:flex; align-items:center; gap:8px; color:#1e293b;">
+                <i data-lucide="users" style="color:var(--primary); width:18px;"></i> Ventas por COLABORADOR
+              </h3>
+              <div style="display:flex; background:#f1f5f9; padding:3px; border-radius:10px; gap:2px;">
+                ${['today', 'week', 'month', 'year', 'all'].map(p => {
+                  const labels = { today: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año', all: 'Histórico' };
+                  const active = (state.collabSalesPeriod || 'month') === p;
+                  return `
+                    <button onclick="state.collabSalesPeriod='${p}';render()" 
+                      style="padding:5px 12px; font-size:11px; font-weight:700; border-radius:7px; border:none; cursor:pointer; 
+                      background:${active ? 'white' : 'transparent'}; 
+                      color:${active ? 'var(--primary)' : '#64748b'}; 
+                      box-shadow:${active ? '0 1px 3px rgba(0,0,0,0.08)' : 'none'}; 
+                      transition:all 0.15s ease;">
+                      ${labels[p]}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
               ${(() => {
-                const userSales = {};
+                const period = state.collabSalesPeriod || 'month';
+                const now = new Date();
+                const todayStr = now.toISOString().split('T')[0];
+
+                // Calcular inicio de semana (Domingo)
+                const startOfWeek = new Date();
+                startOfWeek.setDate(now.getDate() - now.getDay());
+                const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
+
+                const currentMonthStr = todayStr.substring(0, 7);
+                const currentYearStr = todayStr.substring(0, 4);
+
                 const ventaCatId = state.categories.find(c => c.name === 'Venta' && c.type === 'income')?.id;
-                
-                state.transactions
-                  .filter(t => t.type === 'income' && (t.category_id === ventaCatId || t.description?.includes('Venta POS')))
-                  .forEach(t => {
-                    const emp = state.employees.find(e => e.id === t.user_id);
-                    const name = emp ? emp.name : (t.user_id === state.user.id ? state.user.name : 'COLABORADOR');
-                    userSales[name] = (userSales[name] || 0) + Number(t.amount);
-                  });
 
-                const sorted = Object.entries(userSales).sort((a, b) => b[1] - a[1]);
+                // Filtrar transacciones de venta según el período seleccionado
+                const filteredTx = state.transactions.filter(t => {
+                  const isSale = t.type === 'income' && (t.category_id === ventaCatId || t.description?.includes('Venta POS'));
+                  if (!isSale) return false;
 
-                return sorted.map(([name, total]) => `
-                    <div style="display:flex; justify-content:space-between; align-items:center; padding:10px; background:#f8fafc; border-radius:10px;">
-                      <span style="font-weight:600; font-size:13px;">${name}</span>
-                      <span style="font-weight:800; color:var(--success);">${formatCurrency(total)}</span>
+                  if (period === 'today') {
+                    return t.date === todayStr;
+                  } else if (period === 'week') {
+                    return t.date >= startOfWeekStr;
+                  } else if (period === 'month') {
+                    return t.date.startsWith(currentMonthStr);
+                  } else if (period === 'year') {
+                    return t.date.startsWith(currentYearStr);
+                  }
+                  return true; // 'all'
+                });
+
+                // Agrupar métricas
+                const stats = {};
+                state.employees.forEach(emp => {
+                  stats[emp.id] = { totalAmount: 0, salesCount: 0, empName: emp.name, id: emp.id };
+                });
+                stats[state.user.id] = { totalAmount: 0, salesCount: 0, empName: state.user.name, id: state.user.id };
+
+                filteredTx.forEach(t => {
+                  const uid = t.user_id || state.user.id;
+                  if (!stats[uid]) {
+                    stats[uid] = { totalAmount: 0, salesCount: 0, empName: 'Colaborador', id: uid };
+                  }
+                  stats[uid].totalAmount += Number(t.amount);
+                  stats[uid].salesCount += 1;
+                });
+
+                // Ordenar líderes por monto vendido
+                const leaderboard = Object.values(stats)
+                  .filter(s => s.totalAmount > 0 || state.employees.some(e => e.id === s.id))
+                  .sort((a, b) => b.totalAmount - a.totalAmount);
+
+                const maxSalesAmount = leaderboard.length > 0 ? Math.max(...leaderboard.map(s => s.totalAmount)) : 0;
+
+                const getRankBadge = (index) => {
+                  if (index === 0) return '🥇';
+                  if (index === 1) return '🥈';
+                  if (index === 2) return '🥉';
+                  return `<span style="font-size:10px; font-weight:800; color:#64748b; background:#e2e8f0; width:22px; height:22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;">${index + 1}</span>`;
+                };
+
+                if (filteredTx.length === 0) {
+                  return `
+                    <div style="text-align:center; padding:30px 20px; color:#94a3b8;">
+                      <span style="font-size:36px; display:block; margin-bottom:10px;">📦</span>
+                      <p style="margin:0; font-size:13px; font-weight:600;">Sin ventas registradas en el período seleccionado</p>
                     </div>
-                  `).join('') || '<p style="text-align:center; color:var(--text-muted); padding:20px;">Sin ventas registradas hoy</p>';
+                  `;
+                }
+
+                return leaderboard.map((s, index) => {
+                  const pct = maxSalesAmount > 0 ? (s.totalAmount / maxSalesAmount) * 100 : 0;
+                  return `
+                    <div style="display:flex; flex-direction:column; gap:8px; padding:12px; background:#f8fafc; border-radius:14px; border:1px solid #f1f5f9; transition:all 0.2s ease;">
+                      <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div style="display:flex; align-items:center; gap:10px; flex: 1; min-width: 0;">
+                          <span style="font-size:16px; width:24px; text-align:center; display:flex; justify-content:center; align-items:center;">${getRankBadge(index)}</span>
+                          <div style="width:34px; height:34px; min-width:34px; border-radius:50%; background:linear-gradient(135deg, var(--primary), var(--secondary)); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; box-shadow:0 2px 5px rgba(59,130,246,0.15);">
+                            ${s.empName.substring(0, 2).toUpperCase()}
+                          </div>
+                          <div style="min-width: 0; flex: 1;">
+                            <span style="font-weight:700; font-size:13px; color:#1e293b; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${s.empName}</span>
+                            <p style="font-size:10px; color:#64748b; margin:0;">${s.salesCount} ventas · Prom: ${formatCurrency(s.salesCount > 0 ? s.totalAmount / s.salesCount : 0)}</p>
+                          </div>
+                        </div>
+                        <div style="text-align:right; display:flex; align-items:center; gap:8px; margin-left:10px;">
+                          <div>
+                            <span style="font-weight:800; font-size:14px; color:#10b981; display:block;">${formatCurrency(s.totalAmount)}</span>
+                          </div>
+                          <button onclick="window.openCollabAnalytics('${s.id}')" 
+                            style="padding:6px 12px; font-size:11px; font-weight:800; background:white; color:var(--primary); border:1px solid #cbd5e1; border-radius:8px; cursor:pointer; transition:all 0.15s ease;">
+                            Analizar
+                          </button>
+                        </div>
+                      </div>
+                      <!-- Barra de Progreso Visual -->
+                      <div style="width:100%; height:5px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
+                        <div style="width:${pct}%; height:100%; background:linear-gradient(90deg, var(--primary), #10b981); border-radius:3px; transition:width 0.3s ease;"></div>
+                      </div>
+                    </div>
+                  `;
+                }).join('');
               })()}
             </div>
           </div>
@@ -3120,6 +3223,239 @@ const render = () => {
         </form>
       </div>
     </div>` : ''}
+
+    ${state.activeModal === 'collab_analytics' ? (() => {
+      const empId = state.selectedCollabId;
+      const emp = state.employees.find(e => e.id === empId) || (empId === state.user.id ? state.user : null);
+      if (!emp) return '';
+
+      // Obtener el año y mes seleccionado para el calendario
+      if (state.collabCalendarYear === undefined) {
+        const d = new Date();
+        state.collabCalendarYear = d.getFullYear();
+        state.collabCalendarMonth = d.getMonth();
+      }
+      
+      const calYear = state.collabCalendarYear;
+      const calMonth = state.collabCalendarMonth;
+      
+      const ventaCatId = state.categories.find(c => c.name === 'Venta' && c.type === 'income')?.id;
+
+      // Filtrar transacciones del empleado
+      const empTx = state.transactions.filter(t => {
+        const isEmployee = (t.user_id === emp.id) || (emp.id === state.user.id && !t.user_id);
+        const isSale = t.type === 'income' && (t.category_id === ventaCatId || t.description?.includes('Venta POS'));
+        return isEmployee && isSale;
+      });
+
+      // Métricas clave del empleado (Totales del mes seleccionado)
+      const monthPrefix = `${calYear}-${String(calMonth + 1).padStart(2, '0')}`;
+      const monthTx = empTx.filter(t => t.date.startsWith(monthPrefix));
+
+      const totalVendido = monthTx.reduce((sum, t) => sum + Number(t.amount), 0);
+      const totalTransacciones = monthTx.length;
+      const ticketPromedio = totalTransacciones > 0 ? totalVendido / totalTransacciones : 0;
+      const maxTicket = totalTransacciones > 0 ? Math.max(...monthTx.map(t => Number(t.amount))) : 0;
+
+      // Mapear ventas por día
+      const salesByDay = {}; // día -> { count, total }
+      monthTx.forEach(t => {
+        const day = parseInt(t.date.split('-')[2], 10);
+        if (!salesByDay[day]) salesByDay[day] = { count: 0, total: 0 };
+        salesByDay[day].count += 1;
+        salesByDay[day].total += Number(t.amount);
+      });
+
+      // Generar días del calendario
+      const monthNames = [
+        'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+        'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+      ];
+      
+      // Primer día del mes
+      const firstDayDate = new Date(calYear, calMonth, 1);
+      const startDayIndex = firstDayDate.getDay(); 
+      const totalDays = new Date(calYear, calMonth + 1, 0).getDate();
+
+      // Generar la grilla
+      const calendarCells = [];
+      for (let i = 0; i < startDayIndex; i++) {
+        calendarCells.push(null);
+      }
+      for (let day = 1; day <= totalDays; day++) {
+        calendarCells.push(day);
+      }
+
+      const selectedDay = state.collabSelectedCalDay || null;
+      const dayTx = selectedDay ? monthTx.filter(t => parseInt(t.date.split('-')[2], 10) === selectedDay) : [];
+
+      return `
+      <div class="modal-overlay" style="display:flex; align-items:center; justify-content:center; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.6); backdrop-filter:blur(4px); z-index:9999; padding:20px; overflow-y:auto;">
+        <div class="modal-card card" style="max-width:700px; width:100%; max-height:90vh; overflow-y:auto; padding:25px; border-radius:24px; position:relative; background:white; box-shadow:0 20px 40px rgba(0,0,0,0.15);">
+          <div class="modal-close" onclick="state.activeModal=null;state.collabSelectedCalDay=null;render()" style="position:absolute; top:20px; right:20px; font-size:24px; cursor:pointer; color:#64748b; font-weight:bold; transition:all 0.15s;">✕</div>
+          
+          <!-- Header Perfil -->
+          <div style="display:flex; align-items:center; gap:16px; margin-bottom:25px; border-bottom:1px solid #f1f5f9; padding-bottom:20px;">
+            <div style="width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg, var(--primary), var(--secondary)); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:20px; box-shadow:0 4px 10px rgba(59,130,246,0.2);">
+              ${emp.name.substring(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <h2 style="margin:0; font-size:20px; color:#1f2937;">${emp.name}</h2>
+              <p style="margin:0 0 4px 0; font-size:12px; color:#64748b;">${emp.email || 'Sin correo registrado'} · <span style="font-weight:700; color:var(--primary);">${emp.role?.toUpperCase() || 'COLABORADOR'}</span></p>
+              <div style="display:flex; gap:6px;">
+                <span style="font-size:10px; background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; padding:2px 8px; border-radius:20px; font-weight:700;">
+                  ${totalTransacciones > 10 ? '🔥 Vendedor Activo' : '👤 Colaborador'}
+                </span>
+                ${ticketPromedio > 200000 ? `
+                  <span style="font-size:10px; background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; padding:2px 8px; border-radius:20px; font-weight:700;">
+                    📈 Ticket Alto
+                  </span>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+
+          <!-- Métricas Grid -->
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:12px; margin-bottom:25px;">
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Venta del Mes</p>
+              <h3 style="margin:0; font-size:18px; color:#10b981; font-weight:800;">${formatCurrency(totalVendido)}</h3>
+            </div>
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Promedio x Venta</p>
+              <h3 style="margin:0; font-size:18px; color:var(--primary); font-weight:800;">${formatCurrency(ticketPromedio)}</h3>
+            </div>
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Transacciones</p>
+              <h3 style="margin:0; font-size:18px; color:#4f46e5; font-weight:800;">${totalTransacciones}</h3>
+            </div>
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Venta Máxima</p>
+              <h3 style="margin:0; font-size:18px; color:#d97706; font-weight:800;">${formatCurrency(maxTicket)}</h3>
+            </div>
+          </div>
+
+          <!-- Calendario y Detalle Diario (2 Columnas) -->
+          <div style="display:grid; grid-template-columns: 1fr; gap:20px; margin-bottom:20px;">
+            
+            <!-- Calendario de Ventas -->
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:20px; padding:20px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h4 style="margin:0; font-size:14px; color:#334155; font-weight:800; display:flex; align-items:center; gap:6px;">
+                  <i data-lucide="calendar" style="width:16px; color:var(--primary);"></i> Calendario de Ventas
+                </h4>
+                <div style="display:flex; align-items:center; gap:10px;">
+                  <button onclick="window.changeCollabCalendarMonth(-1)" style="background:white; border:1px solid #cbd5e1; border-radius:8px; width:28px; height:28px; cursor:pointer; font-weight:bold; color:#475569;">◀</button>
+                  <span style="font-size:13px; font-weight:800; color:#334155; min-width:110px; text-align:center;">${monthNames[calMonth]} ${calYear}</span>
+                  <button onclick="window.changeCollabCalendarMonth(1)" style="background:white; border:1px solid #cbd5e1; border-radius:8px; width:28px; height:28px; cursor:pointer; font-weight:bold; color:#475569;">▶</button>
+                </div>
+              </div>
+
+              <!-- Cabecera de Días de la Semana -->
+              <div style="display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; text-align:center; font-weight:700; font-size:11px; color:#64748b; margin-bottom:8px;">
+                <span>Dom</span><span>Lun</span><span>Mar</span><span>Mié</span><span>Jue</span><span>Vie</span><span>Sáb</span>
+              </div>
+
+              <!-- Grilla de Días -->
+              <div style="display:grid; grid-template-columns: repeat(7, 1fr); gap:6px;">
+                ${calendarCells.map(day => {
+                  if (day === null) {
+                    return `<div style="aspect-ratio: 1; border-radius:10px; background:transparent;"></div>`;
+                  }
+                  
+                  const sales = salesByDay[day];
+                  const hasSales = !!sales;
+                  const isSelected = selectedDay === day;
+                  
+                  let cellBg = 'white';
+                  let cellColor = '#334155';
+                  let border = '1px solid #e2e8f0';
+                  
+                  if (hasSales) {
+                    if (sales.total > 400000) {
+                      cellBg = '#047857';
+                      cellColor = 'white';
+                      border = 'none';
+                    } else if (sales.total > 150000) {
+                      cellBg = '#10b981';
+                      cellColor = 'white';
+                      border = 'none';
+                    } else {
+                      cellBg = '#d1fae5';
+                      cellColor = '#065f46';
+                      border = 'none';
+                    }
+                  }
+
+                  if (isSelected) {
+                    border = '3px solid var(--primary)';
+                  }
+
+                  return `
+                    <div onclick="${hasSales ? `state.collabSelectedCalDay=${day};render()` : ''}" 
+                      title="${hasSales ? `${sales.count} ventas - Total: ${formatCurrency(sales.total)}` : 'Sin ventas'}"
+                      style="aspect-ratio: 1; border-radius:10px; background:${cellBg}; color:${cellColor}; border:${border}; display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:12px; font-weight:700; cursor:${hasSales ? 'pointer' : 'default'}; transition:all 0.15s ease; position:relative; box-shadow:${isSelected ? '0 0 10px rgba(59,130,246,0.3)' : 'none'};">
+                      <span>${day}</span>
+                      ${hasSales ? `<span style="font-size:7px; font-weight:800; opacity:0.9; margin-top:2px;">$${Math.round(sales.total / 1000)}k</span>` : ''}
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+
+            <!-- Detalle de Ventas del Día Seleccionado -->
+            <div style="background:white; border:1px solid #f1f5f9; border-radius:20px; padding:20px; box-shadow:0 4px 6px rgba(0,0,0,0.02);">
+              <h4 style="margin:0 0 15px 0; font-size:14px; color:#334155; font-weight:800; display:flex; align-items:center; justify-content:space-between;">
+                <span>
+                  <i data-lucide="receipt" style="width:16px; color:var(--success); vertical-align:middle; margin-right:4px;"></i> 
+                  Ventas del ${selectedDay ? `${selectedDay} de ${monthNames[calMonth]}` : 'Mes'}
+                </span>
+                <span style="font-size:11px; background:#f1f5f9; color:#475569; padding:2px 8px; border-radius:10px;">
+                  ${dayTx.length || monthTx.length} registros
+                </span>
+              </h4>
+
+              <div style="display:flex; flex-direction:column; gap:10px; max-height:280px; overflow-y:auto; padding-right:5px;">
+                ${(() => {
+                  const txList = selectedDay ? dayTx : monthTx;
+                  if (txList.length === 0) {
+                    return `
+                      <div style="text-align:center; padding:40px 20px; color:#94a3b8;">
+                        <span style="font-size:32px;">📭</span>
+                        <p style="margin:10px 0 0 0; font-size:12px; font-weight:600;">Ninguna venta registrada para esta fecha.</p>
+                      </div>
+                    `;
+                  }
+
+                  return txList.map(t => {
+                    const timeStr = t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Hora N/A';
+                    return `
+                      <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:#f8fafc; border-radius:12px; border:1px solid #f1f5f9; transition:all 0.15s ease;">
+                        <div>
+                          <p style="margin:0; font-weight:700; font-size:12px; color:#1e293b;">${t.description || 'Venta POS'}</p>
+                          <span style="font-size:10px; color:#94a3b8;">📅 ${t.date} · 🕒 ${timeStr} · 💳 ${t.payment_method || 'Efectivo'}</span>
+                        </div>
+                        <span style="font-weight:800; font-size:13px; color:#10b981;">+ ${formatCurrency(t.amount)}</span>
+                      </div>
+                    `;
+                  }).join('');
+                })()}
+              </div>
+            </div>
+
+          </div>
+
+          <div style="display:flex; justify-content:flex-end;">
+            <button onclick="state.activeModal=null;state.collabSelectedCalDay=null;render()" 
+              class="btn-primary" 
+              style="background:#64748b; border:none; padding:10px 20px; color:#f1f5f9; border-radius:12px; font-weight:700; font-size:13px; cursor:pointer;">
+              Cerrar Analíticas
+            </button>
+          </div>
+        </div>
+      </div>
+      `;
+    })() : ''}
   `;
 
   const toastHtml = `<div id="toast-container"></div>`;
@@ -5826,3 +6162,30 @@ document.addEventListener('visibilitychange', async () => {
      }
   }
 });
+
+// 📊 COMPONENTES GLOBALES DE ANALÍTICA DE COLABORADORES (v1.8.0)
+window.openCollabAnalytics = (userId) => {
+  state.selectedCollabId = userId;
+  state.collabSelectedCalDay = null; // Reiniciar día seleccionado
+  state.activeModal = 'collab_analytics';
+  render();
+};
+
+window.changeCollabCalendarMonth = (direction) => {
+  if (state.collabCalendarMonth === undefined) {
+    const d = new Date();
+    state.collabCalendarYear = d.getFullYear();
+    state.collabCalendarMonth = d.getMonth();
+  }
+  state.collabCalendarMonth += direction;
+  if (state.collabCalendarMonth > 11) {
+    state.collabCalendarMonth = 0;
+    state.collabCalendarYear += 1;
+  } else if (state.collabCalendarMonth < 0) {
+    state.collabCalendarMonth = 11;
+    state.collabCalendarYear -= 1;
+  }
+  state.collabSelectedCalDay = null; // Reiniciar día seleccionado al cambiar de mes
+  render();
+};
+
