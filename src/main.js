@@ -5609,44 +5609,55 @@ window.registerGeolocation = async (type) => {
       console.warn("[GPS] Fallo comprobación de permisos, intentando de todas formas:", permErr);
     }
 
-    // 🎯 FILTRO DE PRECISIÓN TRIPLE CON FALLBACK (Eliminación de Ruido GPS)
+    // 🎯 FILTRO DE PRECISIÓN TRIPLE CON FALLBACK Y TIMEOUT ESTRICTO (Eliminación de Ruido GPS)
     const samples = [];
     const maxRetries = 6;
     let attempts = 0;
+    let gotTimeout = false;
 
-    window.showToast("📡 Estabilizando señal GPS (3 muestras)...", "info");
+    window.showToast("📡 Estabilizando señal GPS...", "info");
 
-    while (samples.length < 3 && attempts < maxRetries) {
+    while (samples.length < 3 && attempts < maxRetries && !gotTimeout) {
       try {
-        const pos = await Geolocation.getCurrentPosition({ 
-          enableHighAccuracy: true, 
-          maximumAge: 0, 
-          timeout: 5000 
-        });
+        // Envolver en un timeout estricto de JS de 4.5 segundos para evitar colgaduras nativas permanentes
+        const pos = await Promise.race([
+          Geolocation.getCurrentPosition({ 
+            enableHighAccuracy: true, 
+            maximumAge: 0, 
+            timeout: 4000 
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_GPS")), 4500))
+        ]);
         
-        // Aceptar muestras con precisión razonable (< 150m) para mayor flexibilidad
-        if (pos.coords.accuracy < 150) {
+        const accuracy = pos.coords.accuracy || 10;
+        if (accuracy < 150) {
           samples.push(pos.coords);
         } else {
-          console.warn("[GPS] Muestra ignorada por baja precisión:", pos.coords.accuracy);
+          console.warn("[GPS] Muestra ignorada por baja precisión:", accuracy);
         }
       } catch (err) {
         console.warn("[GPS] Fallo de lectura temporal:", err);
+        if (err.message === "TIMEOUT_GPS" || err.message?.includes("location disabled") || err.message?.includes("provider")) {
+          gotTimeout = true; // Salir de inmediato si hay un cuelgue o está apagado el GPS
+        }
       }
       attempts++;
-      if (samples.length < 3) await new Promise(r => setTimeout(r, 600)); // Pausa más corta
+      if (samples.length < 3 && !gotTimeout) await new Promise(r => setTimeout(r, 500));
     }
 
     // FALLBACK DE SEGURIDAD: Si no pudimos recolectar 3 muestras de alta precisión, pero tenemos al menos una lectura
     if (samples.length === 0) {
       window.showToast("🔄 Buscando señal GPS alternativa...", "info");
       try {
-        // Intentar lectura rápida usando el proveedor de red/Wi-Fi (sin exigir alta precisión de satélite)
-        const pos = await Geolocation.getCurrentPosition({ 
-          enableHighAccuracy: false, 
-          maximumAge: 10000, 
-          timeout: 5000 
-        });
+        // Intentar lectura rápida usando el proveedor de red/Wi-Fi y permitiendo caché
+        const pos = await Promise.race([
+          Geolocation.getCurrentPosition({ 
+            enableHighAccuracy: false, 
+            maximumAge: 15000, 
+            timeout: 4000 
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_FALLBACK")), 4500))
+        ]);
         samples.push(pos.coords);
       } catch (err) {
         console.error("[GPS] Fallo definitivo obteniendo ubicación:", err);
@@ -5678,22 +5689,28 @@ window.registerGeolocation = async (type) => {
       let isOutside = false;
 
       if (polyConfig && polyConfig.polygon && polyConfig.polygon.length >= 3) {
-        // Validación exacta por POLÍGONO
-        const inside = window.isPointInPolygon([coords.lat, coords.lng], polyConfig.polygon);
-        
-        if (!inside) {
-          // Si está fuera del polígono, chequear si está dentro del BUFFER de tolerancia
-          // Para simplificar: chequear distancia al centro si el polígono falla
-          const distToCenter = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
-          const tolerance = polyConfig.buffer || 30;
+        try {
+          // Validación exacta por POLÍGONO
+          const inside = window.isPointInPolygon([coords.lat, coords.lng], polyConfig.polygon);
           
-          // Nota: Lo ideal sería distancia al borde del polígono, pero dist al centro + buffer es una buena aproximación táctica
-          if (distToCenter > tolerance + 20) { // +20m de margen por GPS drift
-             isOutside = true;
+          if (!inside) {
+            // Si está fuera del polígono, chequear si está dentro del BUFFER de tolerancia
+            const distToCenter = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
+            const tolerance = polyConfig.buffer || 30;
+            if (distToCenter > tolerance + 20) { // +20m de margen por GPS drift
+               isOutside = true;
+            }
+          }
+        } catch (polyErr) {
+          console.error("[GPS] Error en validación por polígono, haciendo fallback a clásica:", polyErr);
+          if (biz.lat && biz.lng && biz.lat !== 0 && biz.lng !== 0) {
+            const distanceMeters = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
+            const maxRadius = biz.geofence_radius_meters || 100;
+            isOutside = distanceMeters > maxRadius;
           }
         }
-      } else if (biz.lat && biz.lng) {
-        // Fallback a validación circular clásica
+      } else if (biz.lat && biz.lng && biz.lat !== 0 && biz.lng !== 0) {
+        // Fallback a validación circular clásica (Evitando la trampa de la isla nula 0,0)
         const distanceMeters = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
         const maxRadius = biz.geofence_radius_meters || 100;
         isOutside = distanceMeters > maxRadius;
@@ -5717,7 +5734,12 @@ window.registerGeolocation = async (type) => {
       
       if (error) {
          if (error.message?.includes('fetch') || error.code === 'PGRST301' || error.message?.includes('Failed to fetch')) throw error;
-         else { window.showToast(`Error en BD: ${error.message}`, "danger"); return; }
+         else { 
+           window.showToast(`Error en BD: ${error.message}`, "danger"); 
+           state.loading = false;
+           render();
+           return; 
+         }
       }
       window.showToast(`✅ ${eventType} registrada con éxito. (Precisión: ${Math.round(coords.accuracy)}m)`, "success");
     } catch(dbErr) {
