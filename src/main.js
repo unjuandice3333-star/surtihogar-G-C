@@ -721,8 +721,11 @@ window.handleLogin = async (e) => {
 window.handleLogout = async () => {
   state.loading = true; render();
   byodService.stopTracking();
-  // Detener el polling del mapa en tiempo real al cerrar sesión
-  if (window.byodLiveInterval) { clearInterval(window.byodLiveInterval); window.byodLiveInterval = null; }
+  // Cerrar canal Realtime del mapa en tiempo real al cerrar sesión
+  if (window.byodRealtimeChannel) {
+    supabase.removeChannel(window.byodRealtimeChannel);
+    window.byodRealtimeChannel = null;
+  }
   await supabase.auth.signOut();
   location.reload();
 };
@@ -5902,22 +5905,30 @@ window.updateByodMarkers = (latestByEmployee) => {
 };
 
 // ⏱️ POLLING EN TIEMPO REAL: ACTUALIZA POSICIONES CADA 15 SEGUNDOS
+// 🧹 LIMPIEZA AUTOMÁTICA: Borra heartbeats de más de 24h para mantener la DB ligera
+window.cleanOldHeartbeats = async () => {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { error } = await supabase
+      .from('device_heartbeats')
+      .delete()
+      .lt('timestamp', cutoff);
+    if (!error) console.log('[BYOD_LIVE] Limpieza de heartbeats antiguos completada.');
+  } catch (e) {
+    console.warn('[BYOD_LIVE] Error en limpieza de heartbeats:', e.message);
+  }
+};
+
+// ⚡ REALTIME EN TIEMPO REAL: Supabase escucha inserts en device_heartbeats y actualiza el mapa al instante
 window.startByodLiveTracking = () => {
-  // Limpiar cualquier interval previo
-  if (window.byodLiveInterval) {
-    clearInterval(window.byodLiveInterval);
-    window.byodLiveInterval = null;
+  // Cerrar canal previo si existe
+  if (window.byodRealtimeChannel) {
+    supabase.removeChannel(window.byodRealtimeChannel);
+    window.byodRealtimeChannel = null;
   }
 
-  const tick = async () => {
-    // Detener automáticamente si el admin salió del panel
-    if (state.view !== 'byod_dashboard') {
-      clearInterval(window.byodLiveInterval);
-      window.byodLiveInterval = null;
-      console.log("[BYOD_LIVE] Panel cerrado — polling detenido.");
-      return;
-    }
-
+  // Carga inicial de posiciones para poblar el mapa y el badge EN VIVO
+  (async () => {
     try {
       const { data: heartbeats } = await supabase
         .from('device_heartbeats')
@@ -5927,25 +5938,56 @@ window.startByodLiveTracking = () => {
         .order('timestamp', { ascending: false })
         .limit(200);
 
-      if (!heartbeats || heartbeats.length === 0) return;
-
-      // Tomar el heartbeat más reciente de cada empleado
-      const latestByEmployee = {};
-      heartbeats.forEach(hb => {
-        if (!latestByEmployee[hb.user_id]) latestByEmployee[hb.user_id] = hb;
-      });
-
-      window.updateByodMarkers(latestByEmployee);
-      console.log(`[BYOD_LIVE] Posiciones actualizadas: ${Object.keys(latestByEmployee).length} colaboradores.`);
+      if (heartbeats && heartbeats.length > 0) {
+        const latestByEmployee = {};
+        heartbeats.forEach(hb => {
+          if (!latestByEmployee[hb.user_id]) latestByEmployee[hb.user_id] = hb;
+        });
+        window.updateByodMarkers(latestByEmployee);
+      }
     } catch (e) {
-      console.warn("[BYOD_LIVE] Error actualizando posiciones:", e.message);
+      console.warn('[BYOD_LIVE] Error en carga inicial:', e.message);
     }
-  };
+  })();
 
-  // Primera consulta inmediata para poblar el contador del badge
-  tick();
-  window.byodLiveInterval = setInterval(tick, 15000);
-  console.log("[BYOD_LIVE] Polling iniciado — refresca cada 15s.");
+  // Ejecutar limpieza de heartbeats viejos al abrir el panel (mantiene DB ligera)
+  window.cleanOldHeartbeats();
+
+  // Suscribirse a Supabase Realtime: reacciona al instante cuando un empleado envía su posición
+  window.byodRealtimeChannel = supabase
+    .channel('byod_live_positions')
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'device_heartbeats' },
+      (payload) => {
+        // Se dispara en < 1 segundo cuando el empleado se mueve
+        if (state.view !== 'byod_dashboard') {
+          supabase.removeChannel(window.byodRealtimeChannel);
+          window.byodRealtimeChannel = null;
+          console.log('[BYOD_LIVE] Panel cerrado — canal Realtime desconectado.');
+          return;
+        }
+
+        const hb = payload.new;
+        if (!hb || !hb.lat || !hb.lng) return;
+
+        // Mover el marcador del empleado en el mapa AL INSTANTE
+        window.updateByodMarkers({ [hb.user_id]: hb });
+        console.log(`[BYOD_LIVE] Posición en tiempo real: user ${hb.user_id} → ${hb.lat.toFixed(5)}, ${hb.lng.toFixed(5)}`);
+      }
+    )
+    .subscribe((status) => {
+      console.log('[BYOD_LIVE] Estado canal Realtime:', status);
+      // Actualizar color del badge según estado de conexión
+      const badge = document.getElementById('byod-live-badge');
+      if (badge) {
+        badge.style.background = status === 'SUBSCRIBED' ? '#f0fdf4' : '#fff1f2';
+        badge.style.borderColor = status === 'SUBSCRIBED' ? '#86efac' : '#fecdd3';
+        badge.style.color = status === 'SUBSCRIBED' ? '#15803d' : '#be123c';
+      }
+    });
+
+  console.log('[BYOD_LIVE] Canal Realtime iniciado — esperando posiciones en tiempo real.');
 };
 
 // 🔔 GUARDAR CONFIGURACIÓN DE TELEGRAM PARA EL ADMINISTRADOR
