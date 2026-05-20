@@ -721,6 +721,8 @@ window.handleLogin = async (e) => {
 window.handleLogout = async () => {
   state.loading = true; render();
   byodService.stopTracking();
+  // Detener el polling del mapa en tiempo real al cerrar sesión
+  if (window.byodLiveInterval) { clearInterval(window.byodLiveInterval); window.byodLiveInterval = null; }
   await supabase.auth.signOut();
   location.reload();
 };
@@ -2365,7 +2367,11 @@ const render = () => {
                 <h3 style="margin:0; font-size:16px; font-weight:900; color:#1e293b; display:flex; align-items:center; gap:8px;">
                    <i data-lucide="navigation" style="width:18px; color:#3b82f6;"></i> SEGUIMIENTO SATELITAL EN VIVO
                 </h3>
-                <div style="display:flex; gap:10px; align-items:center;">
+                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+                  <div id="byod-live-badge" style="display:flex; align-items:center; gap:6px; background:#fff1f2; border:1px solid #fecdd3; color:#be123c; padding:5px 12px; border-radius:30px; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:0.5px;">
+                    <span style="width:7px; height:7px; border-radius:50%; background:#ef4444; display:inline-block; animation: pulse-alert-red 1.2s infinite;"></span>
+                    EN VIVO · <span id="byod-live-counter">—</span>
+                  </div>
                   <button onclick="window.pickCoordinatesOnMap()" class="btn-primary" style="background:#0284c7; padding:5px 12px; font-size:11px; font-weight:800; border:none; border-radius:12px; display:flex; align-items:center; gap:5px;"><i data-lucide="map-pin" style="width:12px;"></i> UBICAR NEGOCIO AQUÍ</button>
                   <div style="display:flex; align-items:center; gap:6px; background:#ecfdf5; border:1px solid #a7f3d0; color:#047857; padding:5px 12px; border-radius:30px; font-size:11px; font-weight:850; text-transform:uppercase; letter-spacing:0.5px;">
                     <span style="width:7px; height:7px; border-radius:50%; background:#10b981; display:inline-block; animation: pulse-alert-green 1.5s infinite;"></span>
@@ -3858,7 +3864,8 @@ const render = () => {
   // INICIALIZAR MAPA LEAFLET PARA CENTRO DE CONTROL BYOD
   if (state.view === 'byod_dashboard') {
     setTimeout(() => {
-       if (window.initByodMap) window.initByodMap();
+      if (window.initByodMap) window.initByodMap();
+      if (window.startByodLiveTracking) window.startByodLiveTracking();
     }, 100);
   }
   
@@ -5709,6 +5716,8 @@ window.initByodMap = () => {
     } catch(e) {}
     window.byodLeafletInstance = null;
   }
+  // Limpiar el registro de marcadores al reiniciar el mapa
+  window.byodMarkerRegistry = {};
 
   // Resolver locales con GPS válido
   const validSedes = (state.businesses || []).filter(b => b.lat && b.lng);
@@ -5826,6 +5835,117 @@ window.initByodMap = () => {
   } catch(err) {
     console.error("[BYOD_MAP] Error de renderizado:", err);
   }
+};
+
+// 🔴 ACTUALIZA MARCADORES EN EL MAPA SIN DESTRUIRLO (sin parpadeo)
+window.updateByodMarkers = (latestByEmployee) => {
+  const map = window.byodLeafletInstance;
+  if (!map || typeof L === 'undefined') return;
+  if (!window.byodMarkerRegistry) window.byodMarkerRegistry = {};
+
+  const buildLiveIcon = (name, color, isOutside) => L.divIcon({
+    className: 'custom-div-icon',
+    html: `<div class="${isOutside ? 'marker-pulse-red' : ''}" style="background:${color}; color:white; width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:13px; border:3px solid white; box-shadow:0 4px 12px rgba(0,0,0,0.3); transition: background 0.4s;">${name.charAt(0).toUpperCase()}</div>`,
+    iconSize: [34, 34],
+    iconAnchor: [17, 17]
+  });
+
+  Object.values(latestByEmployee).forEach(hb => {
+    const emp = (state.employees || []).find(e => e.id === hb.user_id);
+    const name = emp?.name || 'Colaborador';
+
+    // Evaluar geocerca en tiempo real
+    const activeShift = (state.byodActiveShifts || []).find(s => s.user_id === hb.user_id);
+    const bizId = activeShift?.business_id;
+    const biz = (state.businesses || []).find(b => b.id === bizId);
+    let isOutside = false;
+    if (biz && hb.lat && hb.lng) {
+      const poly = state.geofencePolygons?.[biz.id];
+      if (poly && poly.length >= 3) {
+        isOutside = !window.isPointInPolygon([hb.lat, hb.lng], poly);
+      } else if (biz.lat && biz.lng) {
+        const dist = window.getDistanceInMeters(hb.lat, hb.lng, biz.lat, biz.lng);
+        isOutside = dist > (biz.geofence_radius_meters || 100);
+      }
+    }
+
+    const color = isOutside ? '#ef4444' : '#3b82f6';
+    const newLatLng = L.latLng(hb.lat, hb.lng);
+    const lastPing = new Date(hb.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const popupHtml = `
+      <div style="font-family:sans-serif; font-size:12px; min-width:150px;">
+        <b style="font-size:13px; color:#1e293b;">👤 ${name}</b><br>
+        <span style="display:inline-block; margin-top:4px; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:bold; color:white; background:${isOutside ? '#ef4444':'#10b981'};">
+          ${isOutside ? '🔴 FUERA DE RANGO' : '🟢 DENTRO DE SEDE'}
+        </span><br>
+        <span style="color:#64748b; display:block; margin-top:5px;">⚡ Batería: <b>${hb.battery_level || 0}%</b></span>
+        <span style="color:#64748b;">⏱️ Último pulso: <b>${lastPing}</b></span>
+      </div>`;
+
+    if (window.byodMarkerRegistry[hb.user_id]) {
+      // Mover marcador existente suavemente
+      window.byodMarkerRegistry[hb.user_id].setLatLng(newLatLng);
+      window.byodMarkerRegistry[hb.user_id].setIcon(buildLiveIcon(name, color, isOutside));
+      window.byodMarkerRegistry[hb.user_id].setPopupContent(popupHtml);
+    } else {
+      // Crear marcador nuevo
+      const marker = L.marker(newLatLng, { icon: buildLiveIcon(name, color, isOutside) })
+        .addTo(map)
+        .bindPopup(popupHtml);
+      window.byodMarkerRegistry[hb.user_id] = marker;
+    }
+  });
+
+  // Actualizar contador de empleados activos en el badge EN VIVO
+  const counter = document.getElementById('byod-live-counter');
+  if (counter) counter.textContent = `${Object.keys(latestByEmployee).length} activo${Object.keys(latestByEmployee).length !== 1 ? 's' : ''}`;
+};
+
+// ⏱️ POLLING EN TIEMPO REAL: ACTUALIZA POSICIONES CADA 15 SEGUNDOS
+window.startByodLiveTracking = () => {
+  // Limpiar cualquier interval previo
+  if (window.byodLiveInterval) {
+    clearInterval(window.byodLiveInterval);
+    window.byodLiveInterval = null;
+  }
+
+  const tick = async () => {
+    // Detener automáticamente si el admin salió del panel
+    if (state.view !== 'byod_dashboard') {
+      clearInterval(window.byodLiveInterval);
+      window.byodLiveInterval = null;
+      console.log("[BYOD_LIVE] Panel cerrado — polling detenido.");
+      return;
+    }
+
+    try {
+      const { data: heartbeats } = await supabase
+        .from('device_heartbeats')
+        .select('user_id, lat, lng, battery_level, timestamp')
+        .not('lat', 'is', null)
+        .not('lng', 'is', null)
+        .order('timestamp', { ascending: false })
+        .limit(200);
+
+      if (!heartbeats || heartbeats.length === 0) return;
+
+      // Tomar el heartbeat más reciente de cada empleado
+      const latestByEmployee = {};
+      heartbeats.forEach(hb => {
+        if (!latestByEmployee[hb.user_id]) latestByEmployee[hb.user_id] = hb;
+      });
+
+      window.updateByodMarkers(latestByEmployee);
+      console.log(`[BYOD_LIVE] Posiciones actualizadas: ${Object.keys(latestByEmployee).length} colaboradores.`);
+    } catch (e) {
+      console.warn("[BYOD_LIVE] Error actualizando posiciones:", e.message);
+    }
+  };
+
+  // Primera consulta inmediata para poblar el contador del badge
+  tick();
+  window.byodLiveInterval = setInterval(tick, 15000);
+  console.log("[BYOD_LIVE] Polling iniciado — refresca cada 15s.");
 };
 
 // 🔔 GUARDAR CONFIGURACIÓN DE TELEGRAM PARA EL ADMINISTRADOR
