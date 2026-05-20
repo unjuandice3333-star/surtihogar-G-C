@@ -5101,7 +5101,7 @@ window.testStockManagement = async () => {
 };
 
 window.purgeStagingData = async () => {
-  if (!confirm("🚨 ¡ADVERTENCIA CRÍTICA DE PRODUCCIÓN!\n\nEsta acción eliminará permanentemente:\n- TODOS los turnos de prueba\n- TODOS los productos e inventarios creados hasta hoy\n- TODAS las ventas, movimientos y gastos registrados.\n\n¿Estás 100% seguro de que deseas vaciar la base de datos para empezar de cero?")) return;
+  if (!confirm("🚨 ¡ADVERTENCIA CRÍTICA DE PRODUCCIÓN!\n\nEsta acción eliminará permanentemente:\n- TODOS los turnos de prueba\n- TODOS los productos e inventarios creados hasta hoy\n- TODAS las ventas, ítems de ventas y el historial de movimientos\n- TODOS los registros de auditoría central\n- TODOS los logs y dispositivos\n\n¿Estás 100% seguro de que deseas vaciar la base de datos para empezar de cero?")) return;
   
   const secondConfirm = prompt("Escribe 'BORRAR' en mayúsculas para confirmar la purga definitiva de la base de datos:");
   if (secondConfirm !== 'BORRAR') {
@@ -5115,15 +5115,19 @@ window.purgeStagingData = async () => {
   try {
     window.showToast("⏳ Iniciando purga de datos relacionales...", "info");
     
-    // 1. Detalle de Ventas (sale_items)
+    // 1. Detalle de Ventas (sale_items) — debe ir antes que sales por FK
     const { error: e1 } = await supabase.from('sale_items').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (e1) throw e1;
+
+    // 2. Ventas (sales) — historial de auditoría central y listado de movimientos
+    const { error: e1b } = await supabase.from('sales').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (e1b) throw e1b;
     
-    // 2. Movimientos de Kárdex (inventory_movements)
+    // 3. Movimientos de Kárdex (inventory_movements)
     const { error: e2 } = await supabase.from('inventory_movements').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (e2) throw e2;
     
-    // 3. Transacciones de Caja (transactions)
+    // 4. Transacciones de Caja (transactions)
     const { error: e3 } = await supabase.from('transactions').delete().neq('id', '00000000-0000-0000-0000-000000000000');
     if (e3) throw e3;
 
@@ -5141,7 +5145,7 @@ window.purgeStagingData = async () => {
     // 7. Logs Generales (system_logs)
     await supabase.from('system_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
-    window.showToast("🎯 BASE DE DATOS LIMPIA. Lista para producción absoluta.", "success");
+    window.showToast("🎯 BASE DE DATOS LIMPIA. Ventas, auditoría y movimientos borrados. Lista para producción.", "success");
     
   } catch(err) {
     console.error("Purge execution error:", err);
