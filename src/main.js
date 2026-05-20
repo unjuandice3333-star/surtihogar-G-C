@@ -6408,6 +6408,26 @@ window.registerGeolocation = async (type) => {
          }
       }
       window.showToast(`✅ ${eventType} registrada con éxito. (Precisión: ${Math.round(coords.accuracy)}m)`, "success");
+
+      // 🟢 LLEGADA: Activar motor de rastreo GPS en tiempo real
+      if (type === 'arrival') {
+        const activeBiz = state.businesses.find(b => b.id === state.currentBusinessId);
+        if (activeBiz) {
+          activeBiz.polygonConfig = state.geofencePolygons?.[activeBiz.id];
+          byodService.startTracking(state.user.id, activeBiz);
+          console.log("[ASISTENCIA] Motor BYOD activado por LLEGADA en:", activeBiz.name);
+        }
+      }
+
+      // 🔴 SALIDA: Detener motor + notificar cierre de turno al admin vía Telegram
+      if (type === 'departure') {
+        const mapsLink = (coords.lat && coords.lng) ? `https://maps.google.com/?q=${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}` : null;
+        const bizName = state.businesses.find(b => b.id === state.currentBusinessId)?.name || 'sede';
+        const closingMsg = `🟡 <b>CIERRE DE TURNO</b>\n\n<b>${state.user?.name || 'Colaborador'}</b> registró SALIDA de 📍 <b>${bizName}</b>.\n\n🕒 Hora: ${new Date().toLocaleTimeString()}${coords.lat ? `\n📌 Coords: ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : ''}${mapsLink ? `\n🗺️ Ver en mapa: ${mapsLink}` : ''}`;
+        byodService.triggerTelegramAlert(closingMsg);
+        byodService.stopTracking();
+        console.log("[ASISTENCIA] Motor BYOD detenido por SALIDA.");
+      }
     } catch(dbErr) {
       if (!navigator.onLine || dbErr.message?.includes('fetch') || dbErr.message?.includes('Failed')) {
         const offlineLogs = JSON.parse(localStorage.getItem('offline_gps_logs') || '[]');

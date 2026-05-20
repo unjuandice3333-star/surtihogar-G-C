@@ -67,10 +67,10 @@ class ByodComplianceService {
     // 1. Primer pulso inmediato al iniciar el turno
     this.dispatchHeartbeat();
 
-    // 2. Programar pulso silencioso cada 1 minuto (60,000 ms) para detección rápida
+    // 2. Programar pulso silencioso cada 30 segundos para detección rápida de salidas
     this.heartbeatInterval = setInterval(() => {
       this.dispatchHeartbeat();
-    }, 60000);
+    }, 30000);
   }
 
   /**
@@ -219,8 +219,9 @@ class ByodComplianceService {
           })
         });
 
-        // 2. Notificación Inmediata Telegram (Async sin await para no bloquear heartbeat)
-        const alertMsg = `🚨 <b>ALERTA DE SEGURIDAD</b> 🚨\n\nEl colaborador <b>${employeeName}</b> ha ABANDONADO el perímetro seguro de 📍 <b>${this.geofence.name || 'Sede'}</b>.\n\n📏 Distancia: <b>${Math.round(distance)}m</b>\n🕒 Hora: ${new Date().toLocaleTimeString()}`;
+        // 2. Notificación Inmediata Telegram con coordenadas y enlace de mapa (Async sin await para no bloquear heartbeat)
+        const mapsLink = (coords.lat && coords.lng) ? `https://maps.google.com/?q=${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}` : null;
+        const alertMsg = `🚨 <b>ALERTA DE SEGURIDAD</b> 🚨\n\nEl colaborador <b>${employeeName}</b> ha ABANDONADO el perímetro seguro de 📍 <b>${this.geofence.name || 'Sede'}</b>.\n\n📏 Distancia: <b>${Math.round(distance)}m</b>\n🕒 Hora: ${new Date().toLocaleTimeString()}${coords.lat ? `\n📌 Coords: ${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)}` : ''}${mapsLink ? `\n🗺️ Ver en mapa: ${mapsLink}` : ''}`;
         this.triggerTelegramAlert(alertMsg);
       } 
       
