@@ -5140,12 +5140,29 @@ window.purgeStagingData = async () => {
     if (e5) throw e5;
 
     // 6. Latidos BYOD (device_heartbeats)
-    await supabase.from('device_heartbeats').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    const { error: e6 } = await supabase.from('device_heartbeats').delete().neq('id', '00000000-0000-0000-0000-000000000000');
+    if (e6) console.warn('[PURGE] device_heartbeats:', e6.message);
 
-    // 7. Logs Generales (system_logs)
+    // 7. Logs GPS / Asistencia — columna "Marcación Real (GPS)" en nómina
+    const { error: e7a } = await supabase.from('system_logs').delete().eq('type', 'GEOLOCATION_TRACK');
+    if (e7a) console.warn('[PURGE] GEOLOCATION_TRACK:', e7a.message);
+
+    // 8. Alertas de geocerca y seguridad
+    const { error: e7b } = await supabase.from('system_logs').delete().eq('type', 'SECURITY_ALERT');
+    if (e7b) console.warn('[PURGE] SECURITY_ALERT:', e7b.message);
+
+    // 9. Auditoría de productividad
+    const { error: e7c } = await supabase.from('system_logs').delete().eq('type', 'PRODUCTIVITY_AUDIT');
+    if (e7c) console.warn('[PURGE] PRODUCTIVITY_AUDIT:', e7c.message);
+
+    // 10. Cierres de caja y configuraciones
+    const { error: e7d } = await supabase.from('system_logs').delete().eq('type', 'CASH_CLOSURE');
+    if (e7d) console.warn('[PURGE] CASH_CLOSURE:', e7d.message);
+
+    // 11. Cualquier log restante
     await supabase.from('system_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
-    window.showToast("🎯 BASE DE DATOS LIMPIA. Ventas, auditoría y movimientos borrados. Lista para producción.", "success");
+    window.showToast("🎯 BASE DE DATOS LIMPIA. GPS, ventas, auditoría y nómina borrados. Lista para producción.", "success");
     
   } catch(err) {
     console.error("Purge execution error:", err);
