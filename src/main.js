@@ -20,7 +20,7 @@ const state = {
   categories: [],
   transactions: [],
   currentBusinessId: 'all',
-  timeFilter: 'monthly',
+  timeFilter: 'daily',
   loading: true,
   view: 'loading',
   authError: null,
@@ -46,6 +46,20 @@ const state = {
   posPaymentMethod: 'Efectivo'
 };
 
+const safeQuery = async (queryBuilder, fallback = { data: [] }) => {
+  try {
+    const res = await queryBuilder;
+    if (res && res.error) {
+      console.warn("Advertencia en base de datos:", res.error.message);
+      return fallback;
+    }
+    return res;
+  } catch (err) {
+    console.warn("Fallo de red o consulta en base de datos:", err.message);
+    return fallback;
+  }
+};
+
 window.fetchData = async () => {
   try {
     state.loading = true;
@@ -61,92 +75,119 @@ window.fetchData = async () => {
     if (!session) { 
       if (state.view !== 'register') state.view = 'auth'; 
       state.loading = false;
-      render(); 
+      if (window.render) window.render(); else render(); 
       return; 
     }
 
-    // 3. Cargar Perfil del Usuario logueado
-    const { data: profRes } = await supabase.from('users').select('*').eq('id', session.user.id).maybeSingle();
-    
+    // 3. Cargar Perfil del Usuario logueado (con try-catch robusto)
+    let profRes = null;
+    try {
+      const { data } = await supabase.from('users').select('*').eq('id', session.user.id).maybeSingle();
+      profRes = data;
+    } catch (e) {
+      console.warn("Aviso cargando perfil:", e);
+    }
     state.user = profRes || { id: session.user.id, name: 'Admin', role: 'admin' };
 
     // 3. Determinar Negocio Actual antes de seguir
     // (Aún no tenemos turnos, así que usamos el del perfil como fallback temporal)
     const initialBusId = state.currentBusinessId === 'all' ? 'all' : (state.currentBusinessId || state.user?.business_id || 'all');
 
-    // 4. Cargar Transacciones y Categorías vía DatabaseService
-    const [categories, transactions] = await Promise.all([
-      DatabaseService.fetchCategories(),
-      DatabaseService.fetchTransactions(initialBusId)
-    ]);
+    // 4. Cargar Transacciones y Categorías vía DatabaseService (con catch individual)
+    let categories = [];
+    let transactions = [];
+    try {
+      const [catRes, txRes] = await Promise.all([
+        DatabaseService.fetchCategories().catch(err => { console.warn("Error cargando categorías:", err); return []; }),
+        DatabaseService.fetchTransactions(initialBusId).catch(err => { console.warn("Error cargando transacciones:", err); return []; })
+      ]);
+      categories = catRes;
+      transactions = txRes;
+    } catch (e) {
+      console.warn("Aviso en transacciones/categorías:", e);
+    }
 
     state.categories = categories || [];
     state.transactions = transactions || [];
 
     // 5. Cargas Administrativas o de Colaborador (Turnos)
     if (state.user.role === 'admin') {
-      const [shRes, empRes, salesRes, itemsRes, pendingRes, loadedSuppliers] = await Promise.all([
-        supabase.from('shifts').select('*, businesses(name)').order('start_time', { ascending: false }),
-        supabase.from('users').select('*').neq('role', 'admin'),
-        supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(200),
-        supabase.from('sale_items').select('*, products(name, business_id, cost)'),
-        supabase.from('pending_products').select('*').order('created_at', { ascending: false }),
-        SupplierService.loadAll(state.user.id),
-        supabase.from('system_logs').select('message').eq('type', 'GEOFENCE_POLYGON').order('timestamp', { ascending: false })
-      ]);
-      state.shifts = shRes.data || [];
-      state.employees = empRes.data || [];
-      state.sales = salesRes.data || [];
-      state.saleItems = itemsRes.data || [];
-      state.pendingProducts = pendingRes.data || [];
-      state.suppliers = loadedSuppliers || [];
+      try {
+        const shPromise = safeQuery(supabase.from('shifts').select('*, businesses(name)').order('start_time', { ascending: false }));
+        const empPromise = safeQuery(supabase.from('users').select('*').neq('role', 'admin'));
+        const salesPromise = safeQuery(supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(200));
+        const itemsPromise = safeQuery(supabase.from('sale_items').select('*, products(name, business_id, cost)'));
+        const pendingPromise = safeQuery(supabase.from('pending_products').select('*').order('created_at', { ascending: false }));
+        const suppliersPromise = safeQuery(SupplierService.loadAll(state.user.id), []);
+        const polyPromise = safeQuery(supabase.from('system_logs').select('message').eq('type', 'GEOFENCE_POLYGON').order('timestamp', { ascending: false }));
+        const closuresPromise = safeQuery(supabase.from('cash_closures').select('*, users(name), businesses(name)').order('created_at', { ascending: false }));
 
-      // Cargar Polígonos de Geocercas (Última versión por negocio)
-      state.geofencePolygons = {};
-      if (loadedSuppliers?.[6]?.data) { // polyRes es el 7mo elemento (indice 6)
-        loadedSuppliers[6].data.forEach(log => {
-          try {
-            const config = JSON.parse(log.message);
-            if (config.business_id && !state.geofencePolygons[config.business_id]) {
-               state.geofencePolygons[config.business_id] = config;
-            }
-          } catch(e) {}
-        });
+        const [shRes, empRes, salesRes, itemsRes, pendingRes, suppliersData, polyRes, closuresRes] = await Promise.all([
+          shPromise, empPromise, salesPromise, itemsPromise, pendingPromise, suppliersPromise, polyPromise, closuresPromise
+        ]);
+
+        state.shifts = shRes?.data || [];
+        state.employees = empRes?.data || [];
+        state.sales = salesRes?.data || [];
+        state.saleItems = itemsRes?.data || [];
+        state.pendingProducts = pendingRes?.data || [];
+        state.suppliers = suppliersData || [];
+        state.cashClosures = closuresRes?.data || [];
+
+        // Cargar Polígonos de Geocercas (Última versión por negocio)
+        state.geofencePolygons = {};
+        if (polyRes?.data) {
+          polyRes.data.forEach(log => {
+            try {
+              const config = JSON.parse(log.message);
+              if (config.business_id && !state.geofencePolygons[config.business_id]) {
+                 state.geofencePolygons[config.business_id] = config;
+              }
+            } catch(e) {}
+          });
+        }
+      } catch (err) {
+        console.warn("Aviso cargando datos administrativos:", err);
       }
     } else {
-      const [shRes, attRes] = await Promise.all([
-        supabase.from('shifts').select('*, businesses(lat, lng, geofence_radius_meters, name)').eq('user_id', session.user.id),
-        supabase.from('system_logs').select('message').eq('user_id', session.user.id).eq('type', 'GEOLOCATION_TRACK').order('timestamp', { ascending: false }).limit(1)
-      ]);
-      state.shifts = shRes.data || [];
-      
-      // Validar si hay un turno físico activo por GPS
-      let hasGeoActive = false;
+      state.timeFilter = 'daily'; // Forzar filtro de Hoy / Turno para colaboradores por defecto
       try {
-        if (attRes.data?.[0]) {
-          const msg = JSON.parse(attRes.data[0].message);
-          if (msg.text && msg.text.includes('LLEGADA')) hasGeoActive = true;
-        }
-      } catch(e) {}
-      state.hasActiveAttendance = hasGeoActive;
-      
-      // Calcular turno activo inmediato para alimentar el servicio BYOD local
-      const nowCheck = new Date();
-      const activeShiftLocal = (state.shifts || []).find(s => {
-        const start = new Date(s.start_time);
-        const end = new Date(s.end_time);
-        return nowCheck >= new Date(start.getTime() - 60000) && nowCheck <= end;
-      });
+        const shPromise = safeQuery(supabase.from('shifts').select('*, businesses(lat, lng, geofence_radius_meters, name)').eq('user_id', session.user.id));
+        const attPromise = safeQuery(supabase.from('system_logs').select('message').eq('user_id', session.user.id).eq('type', 'GEOLOCATION_TRACK').order('timestamp', { ascending: false }).limit(1));
 
-      // Activar/Desactivar motor de telemetría silenciosa BYOD con Geocerca
-      if (hasGeoActive && state.user?.role !== 'admin') {
-         const biz = activeShiftLocal?.businesses || state.businesses.find(b => b.id === state.currentBusinessId);
-         if (biz) {
-           biz.polygonConfig = state.geofencePolygons?.[biz.id];
-           byodService.startTracking(session.user.id, biz);
-         }
-      } else {
-         byodService.stopTracking();
+        const [shRes, attRes] = await Promise.all([shPromise, attPromise]);
+        state.shifts = shRes?.data || [];
+        
+        // Validar si hay un turno físico activo por GPS
+        let hasGeoActive = false;
+        try {
+          if (attRes?.data?.[0]) {
+            const msg = JSON.parse(attRes.data[0].message);
+            if (msg.text && msg.text.includes('LLEGADA')) hasGeoActive = true;
+          }
+        } catch(e) {}
+        state.hasActiveAttendance = hasGeoActive;
+        
+        // Calcular turno activo inmediato para alimentar el servicio BYOD local
+        const nowCheck = new Date();
+        const activeShiftLocal = (state.shifts || []).find(s => {
+          const start = new Date(s.start_time);
+          const end = new Date(s.end_time);
+          return nowCheck >= new Date(start.getTime() - 60000) && nowCheck <= end;
+        });
+
+        // Activar/Desactivar motor de telemetría silenciosa BYOD con Geocerca
+        if (hasGeoActive && state.user?.role !== 'admin') {
+           const biz = activeShiftLocal?.businesses || state.businesses.find(b => b.id === state.currentBusinessId);
+           if (biz) {
+             biz.polygonConfig = state.geofencePolygons?.[biz.id];
+             byodService.startTracking(session.user.id, biz);
+           }
+        } else {
+           byodService.stopTracking();
+        }
+      } catch (err) {
+        console.warn("Aviso cargando datos de turno/asistencia:", err);
       }
     }
 
@@ -163,35 +204,44 @@ window.fetchData = async () => {
     state.currentBusinessId = state.activeShiftBusinessId || state.user?.business_id || 'all';
 
     // 7. Carga de productos (Agrupación Inteligente para Clúster Centralizado)
-    let prodQuery = supabase.from('products').select('*, businesses(name)').order('name');
-    const finalFilterId = state.activeShiftBusinessId || (state.currentBusinessId !== 'all' ? state.currentBusinessId : null);
-    
-    if (finalFilterId) {
-       const activeBiz = state.businesses.find(b => b.id === finalFilterId);
-       const clusterKeywords = ['electro', 'mueble', 'ropa', 'pañalera'];
-       const isCentralHub = activeBiz && clusterKeywords.some(kw => activeBiz.name?.toLowerCase().includes(kw));
+    let prodData = [];
+    try {
+      let prodQuery = supabase.from('products').select('*, businesses(name)').order('name');
+      const finalFilterId = state.activeShiftBusinessId || (state.currentBusinessId !== 'all' ? state.currentBusinessId : null);
+      
+      if (finalFilterId) {
+         const activeBiz = state.businesses.find(b => b.id === finalFilterId);
+         const clusterKeywords = ['electro', 'mueble', 'ropa', 'pañalera'];
+         const isCentralHub = activeBiz && clusterKeywords.some(kw => activeBiz.name?.toLowerCase().includes(kw));
 
-       if (isCentralHub) {
-          // Habilitar inventario consolidado unificado entre todas las sedes del clúster operativo centralizado
-          const clusterIds = state.businesses
-            .filter(b => clusterKeywords.some(kw => b.name?.toLowerCase().includes(kw)))
-            .map(b => b.id);
-          
-          prodQuery = prodQuery.in('business_id', clusterIds);
-       } else {
-          prodQuery = prodQuery.eq('business_id', finalFilterId);
-       }
-    } else if (state.user.role !== 'admin' && state.user.business_id) {
-       prodQuery = prodQuery.eq('business_id', state.user.business_id);
+         if (isCentralHub) {
+            // Habilitar inventario consolidado unificado entre todas las sedes del clúster operativo centralizado
+            const clusterIds = state.businesses
+              .filter(b => clusterKeywords.some(kw => b.name?.toLowerCase().includes(kw)))
+              .map(b => b.id);
+            
+            prodQuery = prodQuery.in('business_id', clusterIds);
+         } else {
+            prodQuery = prodQuery.eq('business_id', finalFilterId);
+         }
+      } else if (state.user?.role !== 'admin' && state.user?.business_id) {
+         prodQuery = prodQuery.eq('business_id', state.user.business_id);
+      }
+      
+      const { data } = await prodQuery;
+      prodData = data || [];
+    } catch (e) {
+      console.warn("Aviso cargando productos:", e);
     }
-    
-    const { data: prodData } = await prodQuery;
-    state.products = prodData || [];
+    state.products = prodData;
 
   } catch (e) { 
     console.error("Error Crítico en fetchData:", e);
-    window.showToast('âš ï¸  Error de conexión: ' + e.message, 'danger');
-  } finally { state.loading = false; render(); }
+    window.showToast('⚠️ Error de conexión: ' + e.message, 'danger');
+  } finally { 
+    state.loading = false; 
+    if (window.render) window.render(); else render(); 
+  }
 };
 
 window.logSystemError = async (tipo, mensaje, modulo, contexto = {}) => {
@@ -351,6 +401,10 @@ window.openModal = async (type, shiftId = null, userId = null, date = null) => {
       });
       state.activeShiftBusinessId = shiftBusId;
     } catch(e) { console.warn("Error en RPC get_active_shift:", e); }
+  }
+
+  if (type === 'cash_closure') {
+    state.selectedClosureBusinessId = state.activeShiftBusinessId || state.user?.business_id || '';
   }
 
   render();
@@ -638,15 +692,26 @@ window.handleLogin = async (e) => {
       state.authError = error.message; 
       state.loading = false; 
       window.logSystemError('Auth Error', error.message, 'Login');
-      render(); 
+      if (window.render) window.render(); else render();
     }
     else { 
+      state.authError = null; // Limpiar cualquier error previo
       state.view = 'app'; 
-      await fetchData(); 
+      state.loading = true;
+      if (window.render) window.render(); else render();
+      
+      // Ejecutar la carga de datos de manera asíncrona para que entre de inmediato
+      try {
+        await fetchData(); 
+      } catch (fetchErr) {
+        console.error("Error al cargar datos después del login:", fetchErr);
+        window.showToast("Error al cargar datos iniciales, intenta recargar", "warning");
+      }
     }
   } catch (err) {
     console.error(err);
-    window.showToast("Error de conexión", "danger");
+    const stackInfo = (err.stack || err.message).split('\n').slice(0, 3).map(l => l.trim()).join(' | ');
+    window.showToast("Error de conexión: " + stackInfo, "danger");
   } finally {
     btn.disabled = false;
     btn.innerHTML = originalHtml;
@@ -774,8 +839,9 @@ window.showShiftReport = (timeframe = 'daily') => {
   const totalSales = myTrx.filter(t => t.type === 'income').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
   const totalExpenses = myTrx.filter(t => t.type === 'expense').reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
   const balance = totalSales - totalExpenses;
+  const expensesList = myTrx.filter(t => t.type === 'expense');
 
-  state.shiftReportData = { totalSales, totalExpenses, balance, count: myTrx.length };
+  state.shiftReportData = { totalSales, totalExpenses, balance, count: myTrx.length, expensesList };
   state.activeModal = 'shift_report';
   render();
 };
@@ -784,7 +850,24 @@ window.showShiftReport = (timeframe = 'daily') => {
 const render = () => {
   const app = document.getElementById('app');
   if (state.loading && state.view === 'loading') { app.innerHTML = '<div style="padding:100px;text-align:center;">Cargando...</div>'; return; }
-  
+
+  const getSystemSalesForClosure = (bizId, dateStr) => {
+    const dayTrx = state.transactions.filter(t => {
+      if (t.type !== 'income') return false;
+      if (t.business_id !== bizId) return false;
+      const tDate = new Date(t.date).toLocaleDateString('en-CA');
+      return tDate === dateStr;
+    });
+
+    return {
+      efectivo: dayTrx.filter(t => t.payment_method === 'Efectivo').reduce((sum, t) => sum + Number(t.amount), 0),
+      addi: dayTrx.filter(t => t.payment_method === 'Addi').reduce((sum, t) => sum + Number(t.amount), 0),
+      sistecredito: dayTrx.filter(t => t.payment_method === 'Sistecredito' || t.payment_method === 'Sistecrédito').reduce((sum, t) => sum + Number(t.amount), 0),
+      daviplata: dayTrx.filter(t => t.payment_method === 'Daviplata').reduce((sum, t) => sum + Number(t.amount), 0),
+      nequi: dayTrx.filter(t => t.payment_method === 'Transferencia' || t.payment_method === 'Nequi').reduce((sum, t) => sum + Number(t.amount), 0)
+    };
+  };
+
   let html = '';
   if (state.view === 'auth') {
     html = `
@@ -1161,30 +1244,133 @@ const render = () => {
             </div>
           </div>
 
-          <!-- VENTAS POR COLABORADOR -->
-          <div class="card">
-            <h3 style="font-size:16px; margin-bottom:15px; display:flex; align-items:center; gap:8px;"><i data-lucide="users" style="color:var(--primary); width:18px;"></i> Ventas por COLABORADOR</h3>
-            <div style="display:flex; flex-direction:column; gap:10px;">
+          <!-- VENTAS POR COLABORADOR (Leaderboard Interactivo v1.8.0) -->
+          <div class="card" style="box-shadow: 0 4px 15px rgba(0,0,0,0.02); border: 1px solid rgba(0,0,0,0.05); overflow:hidden;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:18px; flex-wrap:wrap; gap:8px; border-bottom:1px solid #f1f5f9; padding-bottom:12px;">
+              <h3 style="font-size:15px; font-weight:800; margin:0; display:flex; align-items:center; gap:8px; color:#1e293b;">
+                <i data-lucide="users" style="color:var(--primary); width:18px;"></i> Ventas por COLABORADOR
+              </h3>
+              <div style="display:flex; background:#f1f5f9; padding:3px; border-radius:10px; gap:2px;">
+                ${['today', 'week', 'month', 'year', 'all'].map(p => {
+                  const labels = { today: 'Hoy', week: 'Semana', month: 'Mes', year: 'Año', all: 'Histórico' };
+                  const active = (state.collabSalesPeriod || 'month') === p;
+                  return `
+                    <button onclick="state.collabSalesPeriod='${p}';render()" 
+                      style="padding:5px 12px; font-size:11px; font-weight:700; border-radius:7px; border:none; cursor:pointer; 
+                      background:${active ? 'white' : 'transparent'}; 
+                      color:${active ? 'var(--primary)' : '#64748b'}; 
+                      box-shadow:${active ? '0 1px 3px rgba(0,0,0,0.08)' : 'none'}; 
+                      transition:all 0.15s ease;">
+                      ${labels[p]}
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:12px;">
               ${(() => {
-                const userSales = {};
+                const period = state.collabSalesPeriod || 'month';
+                const now = new Date();
+                const todayStr = now.toISOString().split('T')[0];
+
+                // Calcular inicio de semana (Domingo)
+                const startOfWeek = new Date();
+                startOfWeek.setDate(now.getDate() - now.getDay());
+                const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
+
+                const currentMonthStr = todayStr.substring(0, 7);
+                const currentYearStr = todayStr.substring(0, 4);
+
                 const ventaCatId = state.categories.find(c => c.name === 'Venta' && c.type === 'income')?.id;
-                
-                state.transactions
-                  .filter(t => t.type === 'income' && (t.category_id === ventaCatId || t.description?.includes('Venta POS')))
-                  .forEach(t => {
-                    const emp = state.employees.find(e => e.id === t.user_id);
-                    const name = emp ? emp.name : (t.user_id === state.user.id ? state.user.name : 'COLABORADOR');
-                    userSales[name] = (userSales[name] || 0) + Number(t.amount);
-                  });
 
-                const sorted = Object.entries(userSales).sort((a, b) => b[1] - a[1]);
+                // Filtrar transacciones de venta según el período seleccionado
+                const filteredTx = state.transactions.filter(t => {
+                  const isSale = t.type === 'income' && (t.category_id === ventaCatId || t.description?.includes('Venta POS'));
+                  if (!isSale) return false;
 
-                return sorted.map(([name, total]) => `
-                    <div style="display:flex; justify-content:space-between; align-items:center; padding:10px; background:#f8fafc; border-radius:10px;">
-                      <span style="font-weight:600; font-size:13px;">${name}</span>
-                      <span style="font-weight:800; color:var(--success);">${formatCurrency(total)}</span>
+                  if (period === 'today') {
+                    return t.date === todayStr;
+                  } else if (period === 'week') {
+                    return t.date >= startOfWeekStr;
+                  } else if (period === 'month') {
+                    return t.date.startsWith(currentMonthStr);
+                  } else if (period === 'year') {
+                    return t.date.startsWith(currentYearStr);
+                  }
+                  return true; // 'all'
+                });
+
+                // Agrupar métricas
+                const stats = {};
+                state.employees.forEach(emp => {
+                  stats[emp.id] = { totalAmount: 0, salesCount: 0, empName: emp.name, id: emp.id };
+                });
+                stats[state.user.id] = { totalAmount: 0, salesCount: 0, empName: state.user.name, id: state.user.id };
+
+                filteredTx.forEach(t => {
+                  const uid = t.user_id || state.user.id;
+                  if (!stats[uid]) {
+                    stats[uid] = { totalAmount: 0, salesCount: 0, empName: 'Colaborador', id: uid };
+                  }
+                  stats[uid].totalAmount += Number(t.amount);
+                  stats[uid].salesCount += 1;
+                });
+
+                // Ordenar líderes por monto vendido
+                const leaderboard = Object.values(stats)
+                  .filter(s => s.totalAmount > 0 || state.employees.some(e => e.id === s.id))
+                  .sort((a, b) => b.totalAmount - a.totalAmount);
+
+                const maxSalesAmount = leaderboard.length > 0 ? Math.max(...leaderboard.map(s => s.totalAmount)) : 0;
+
+                const getRankBadge = (index) => {
+                  if (index === 0) return '🥇';
+                  if (index === 1) return '🥈';
+                  if (index === 2) return '🥉';
+                  return `<span style="font-size:10px; font-weight:800; color:#64748b; background:#e2e8f0; width:22px; height:22px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center;">${index + 1}</span>`;
+                };
+
+                if (filteredTx.length === 0) {
+                  return `
+                    <div style="text-align:center; padding:30px 20px; color:#94a3b8;">
+                      <span style="font-size:36px; display:block; margin-bottom:10px;">📦</span>
+                      <p style="margin:0; font-size:13px; font-weight:600;">Sin ventas registradas en el período seleccionado</p>
                     </div>
-                  `).join('') || '<p style="text-align:center; color:var(--text-muted); padding:20px;">Sin ventas registradas hoy</p>';
+                  `;
+                }
+
+                return leaderboard.map((s, index) => {
+                  const pct = maxSalesAmount > 0 ? (s.totalAmount / maxSalesAmount) * 100 : 0;
+                  return `
+                    <div style="display:flex; flex-direction:column; gap:8px; padding:12px; background:#f8fafc; border-radius:14px; border:1px solid #f1f5f9; transition:all 0.2s ease;">
+                      <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <div style="display:flex; align-items:center; gap:10px; flex: 1; min-width: 0;">
+                          <span style="font-size:16px; width:24px; text-align:center; display:flex; justify-content:center; align-items:center;">${getRankBadge(index)}</span>
+                          <div style="width:34px; height:34px; min-width:34px; border-radius:50%; background:linear-gradient(135deg, var(--primary), var(--secondary)); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:12px; box-shadow:0 2px 5px rgba(59,130,246,0.15);">
+                            ${s.empName.substring(0, 2).toUpperCase()}
+                          </div>
+                          <div style="min-width: 0; flex: 1;">
+                            <span style="font-weight:700; font-size:13px; color:#1e293b; display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${s.empName}</span>
+                            <p style="font-size:10px; color:#64748b; margin:0;">${s.salesCount} ventas · Prom: ${formatCurrency(s.salesCount > 0 ? s.totalAmount / s.salesCount : 0)}</p>
+                          </div>
+                        </div>
+                        <div style="text-align:right; display:flex; align-items:center; gap:8px; margin-left:10px;">
+                          <div>
+                            <span style="font-weight:800; font-size:14px; color:#10b981; display:block;">${formatCurrency(s.totalAmount)}</span>
+                          </div>
+                          <button onclick="window.openCollabAnalytics('${s.id}')" 
+                            style="padding:6px 12px; font-size:11px; font-weight:800; background:white; color:var(--primary); border:1px solid #cbd5e1; border-radius:8px; cursor:pointer; transition:all 0.15s ease;">
+                            Analizar
+                          </button>
+                        </div>
+                      </div>
+                      <!-- Barra de Progreso Visual -->
+                      <div style="width:100%; height:5px; background:#e2e8f0; border-radius:3px; overflow:hidden;">
+                        <div style="width:${pct}%; height:100%; background:linear-gradient(90deg, var(--primary), #10b981); border-radius:3px; transition:width 0.3s ease;"></div>
+                      </div>
+                    </div>
+                  `;
+                }).join('');
               })()}
             </div>
           </div>
@@ -1206,6 +1392,104 @@ const render = () => {
                 </div>
               `).join('') : '<p style="text-align:center; color:var(--text-muted); padding:20px;">No hay productos pendientes</p>'}
             </div>
+          </div>
+        </div>
+
+        <!-- 💵 PANEL DE AUDITORÍA: CIERRES DE CAJA (CONSOLIDADOS) -->
+        <div class="card" style="margin-top:30px; padding:30px; border:none; box-shadow: 0 10px 30px rgba(0,0,0,0.05); background: #ffffff;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+            <div>
+              <h3 style="font-size:20px; font-weight:800; color:#1e293b; display:flex; align-items:center; gap:12px;">
+                <span style="background:#0f766e; color:white; padding:8px; border-radius:12px; display:inline-flex; align-items:center; justify-content:center;"><i data-lucide="wallet" style="width:20px; height:20px;"></i></span>
+                Auditoría de Cierres de Caja (Consolidados)
+              </h3>
+              <p style="font-size:12px; color:#64748b; margin-top:5px; font-weight:500;">Comparación inteligente de arqueo físico vs registros contables del sistema.</p>
+            </div>
+          </div>
+
+          <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:13px;">
+              <thead>
+                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
+                  <th style="padding:15px; font-weight:900; color:#475569; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Fecha / Sede</th>
+                  <th style="padding:15px; font-weight:900; color:#475569; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Cajero</th>
+                  <th style="padding:15px; font-weight:900; color:#475569; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; text-align:right;">Reportado (Físico)</th>
+                  <th style="padding:15px; font-weight:900; color:#475569; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; text-align:right;">Sistema (POS)</th>
+                  <th style="padding:15px; font-weight:900; color:#475569; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; text-align:right;">Descuadre</th>
+                  <th style="padding:15px; font-weight:900; color:#475569; font-size:11px; text-transform:uppercase; letter-spacing:0.5px;">Desglose por Canal / Observaciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${(!state.cashClosures || state.cashClosures.length === 0) ? `
+                  <tr>
+                    <td colspan="6" style="padding:40px; text-align:center; color:#94a3b8; font-weight:600;">No se han registrado cierres de caja en la base de datos aún.</td>
+                  </tr>
+                ` : state.cashClosures.map(c => {
+                  const sys = getSystemSalesForClosure(c.business_id, c.date);
+                  const totalReported = Number(c.cash_amount) + Number(c.addi_amount) + Number(c.sistecredito_amount) + Number(c.daviplata_amount) + Number(c.nequi_amount);
+                  const totalSystem = sys.efectivo + sys.addi + sys.sistecredito + sys.daviplata + sys.nequi;
+                  const diff = totalReported - totalSystem;
+
+                  let diffColor = '#10b981'; // Verde
+                  let diffText = '🟢 Cuadrado';
+                  let diffBg = '#ecfdf5';
+                  if (diff < -50) {
+                    diffColor = '#ef4444'; // Rojo
+                    diffText = `🔴 Faltante: -${formatCurrency(Math.abs(diff))}`;
+                    diffBg = '#fef2f2';
+                  } else if (diff > 50) {
+                    diffColor = '#f59e0b'; // Ámbar
+                    diffText = `🟡 Sobrante: +${formatCurrency(diff)}`;
+                    diffBg = '#fffbeb';
+                  }
+
+                  return `
+                    <tr style="border-bottom:1px solid #e2e8f0; transition: background 0.2s;">
+                      <td style="padding:15px; font-weight:700;">
+                        <span style="display:block; font-size:13px; color:#1e293b;">${c.date}</span>
+                        <span style="display:block; font-size:11px; color:#64748b; font-weight:500; margin-top:2px;">🏢 ${c.businesses?.name || 'Sede'}</span>
+                      </td>
+                      <td style="padding:15px; color:#475569; font-weight:600;">👤 ${c.users?.name || 'Cajero'}</td>
+                      <td style="padding:15px; text-align:right; font-weight:800; color:#0f766e; font-size:14px;">${formatCurrency(totalReported)}</td>
+                      <td style="padding:15px; text-align:right; font-weight:800; color:#3b82f6; font-size:14px;">${formatCurrency(totalSystem)}</td>
+                      <td style="padding:15px; text-align:right;">
+                        <span style="display:inline-block; padding:4px 10px; border-radius:8px; font-weight:800; font-size:12px; color:${diffColor}; background:${diffBg}; border:1px solid ${diffColor}22;">
+                          ${diffText}
+                        </span>
+                      </td>
+                      <td style="padding:15px;">
+                        <div style="font-size:11px; line-height:1.6; color:#475569; display:grid; grid-template-columns:1fr 1fr; gap:0 15px; width:280px;">
+                          <div>💵 <b>Efectivo</b>: R: ${formatCurrency(c.cash_amount)} / S: ${formatCurrency(sys.efectivo)}</div>
+                          <div>📱 <b>Daviplata</b>: R: ${formatCurrency(c.daviplata_amount)} / S: ${formatCurrency(sys.daviplata)}</div>
+                          <div>💳 <b>Addi</b>: R: ${formatCurrency(c.addi_amount)} / S: ${formatCurrency(sys.addi)}</div>
+                          <div>💳 <b>Sistecrédito</b>: R: ${formatCurrency(c.sistecredito_amount)} / S: ${formatCurrency(sys.sistecredito)}</div>
+                          <div style="grid-column: 1 / -1;">🏦 <b>Nequi/Trans.</b>: R: ${formatCurrency(c.nequi_amount)} / S: ${formatCurrency(sys.nequi)}</div>
+                        </div>
+                        ${(Number(c.other_expenses_amount) > 0 || Number(c.savings_amount) > 0) ? `
+                          <div style="margin-top:8px; display:flex; flex-direction:column; gap:4px; max-width:280px; padding:8px; background:rgba(56,189,248,0.05); border:1px dashed rgba(56,189,248,0.2); border-radius:8px;">
+                            ${Number(c.other_expenses_amount) > 0 ? `
+                              <div style="display:flex; justify-content:space-between; font-size:11px; color:#0369a1; font-weight:700;">
+                                <span>➕ Otros Gastos:</span>
+                                <span>${formatCurrency(c.other_expenses_amount)}</span>
+                              </div>
+                              ${c.other_expenses_description ? `<div style="font-size:10px; color:#475569; font-weight:500; padding-left:10px; font-style:italic;">📝 ${c.other_expenses_description}</div>` : ''}
+                            ` : ''}
+                            ${Number(c.savings_amount) > 0 ? `
+                              <div style="display:flex; justify-content:space-between; font-size:11px; color:#0f766e; font-weight:700; margin-top:${Number(c.other_expenses_amount) > 0 ? '4px' : '0'};">
+                                <span>🐖 Alcancía (Ahorro):</span>
+                                <span>${formatCurrency(c.savings_amount)}</span>
+                              </div>
+                              ${c.savings_description ? `<div style="font-size:10px; color:#475569; font-weight:500; padding-left:10px; font-style:italic;">📝 ${c.savings_description}</div>` : ''}
+                            ` : ''}
+                          </div>
+                        ` : ''}
+                        ${c.observations ? `<div style="margin-top:8px; padding:8px 12px; background:#f8fafc; border-left:3.5px solid #cbd5e1; font-size:11px; font-style:italic; color:#475569; border-radius:0 8px 8px 0; max-width:280px;">📝 ${c.observations}</div>` : ''}
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
           </div>
         </div>
 
@@ -2471,18 +2755,35 @@ const render = () => {
     // Filtro de negocio: Respetar lo decidido en fetchData (que ya prioriza turnos)
     const currentBusId = state.currentBusinessId;
 
-    const trx = state.transactions.filter(t => currentBusId === 'all' || t.business_id === currentBusId);
+    // Los colaboradores solo ven transacciones de tipo 'income' (ventas) asociadas a su id
+    const trx = state.transactions.filter(t => 
+      (currentBusId === 'all' || t.business_id === currentBusId) && 
+      (state.user?.role === 'admin' ? true : (t.user_id === state.user?.id && t.type === 'income'))
+    );
     
+    // A. Detectar turno activo para sincronización inteligente en colaboradores
+    const now = new Date();
+    const activeUserShift = (state.user?.role !== 'admin') ? (state.shifts || []).find(s => {
+      const isUserMatch = s.user_id === state.user?.id;
+      const sStart = new Date(s.start_time);
+      const sEnd = new Date(s.end_time);
+      return isUserMatch && now >= new Date(sStart.getTime() - 60 * 60 * 1000) && now <= new Date(sEnd.getTime() + 60 * 60 * 1000);
+    }) : null;
+
     // Filtro de fecha LOCAL (Evita problemas de medianoche UTC)
     const getLocalDate = (d) => new Date(d).toLocaleDateString('en-CA'); // Retorna YYYY-MM-DD en hora local
-    const todayStr = getLocalDate(new Date());
+    const todayStr = getLocalDate(now);
     
     const timeFilteredTrx = trx.filter(t => {
-      const tDateStr = getLocalDate(t.date);
-      if (state.timeFilter === 'daily') return tDateStr === todayStr;
+      if (state.timeFilter === 'daily') {
+        if (activeUserShift) {
+          // Si hay turno activo, filtrar transacciones ocurridas a partir del inicio de este turno
+          return new Date(t.date) >= new Date(activeUserShift.start_time);
+        }
+        return getLocalDate(t.date) === todayStr;
+      }
       
       const tDate = new Date(t.date);
-      const now = new Date();
       if (state.timeFilter === 'monthly') return tDate.getMonth() === now.getMonth() && tDate.getFullYear() === now.getFullYear();
       if (state.timeFilter === 'weekly') return (now - tDate) <= (7 * 24 * 60 * 60 * 1000);
       return true;
@@ -2518,20 +2819,25 @@ const render = () => {
       <div class="container">
         <div class="card" style="background: linear-gradient(135deg, var(--primary) 0%, #0f172a 100%); color: white; border: none; padding: 32px; position: relative; overflow: hidden; margin-bottom:20px;">
           <div style="position: absolute; top: -20px; right: -20px; font-size: 120px; opacity: 0.05; font-weight: 800; pointer-events: none;">G&C</div>
-          <p style="opacity: 0.8; font-size: 13px; font-weight: 600;">BALANCE TURNO ACTUAL</p>
-          <h2 style="font-size: 38px; font-weight: 800; margin: 10px 0;">${formatCurrency(profit)}</h2>
-            ${state.user?.role === 'admin' ? `
-              <div class="pill" style="background:rgba(16,185,129,0.2); border:1.5px solid rgba(16,185,129,0.5); font-size:12px; padding:10px 18px; display:inline-flex; align-items:center; gap:8px; border-radius:12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                <span style="width:10px; height:10px; border-radius:50%; background:#10b981; box-shadow: 0 0 8px #10b981;"></span>
-                <span style="color:#34d399; font-weight:900; letter-spacing:1.5px; font-size:13px; text-shadow: 0 0 4px rgba(52,211,153,0.3);">ADMINISTRADOR</span>
-              </div>
-            ` : `
-              <div class="pill" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); font-size:12px; padding:8px 15px; display:inline-flex; align-items:center; gap:8px;">
-                <span style="width:8px; height:8px; border-radius:50%; background:${state.currentBusinessId !== 'all' ? '#10b981' : '#f59e0b'};"></span>
-                ${state.businesses.find(b => b.id === state.currentBusinessId)?.name || 'Sin local asignado'}
-              </div>
-            `}
-            ${state.currentBusinessId === 'all' && state.user?.role !== 'admin' ? `<p style="font-size:10px; color:rgba(255,255,255,0.6); margin-top:5px; display:flex; align-items:center; gap:5px;"><i data-lucide="alert-circle" style="width:12px;"></i> Pide al Admin que te asigne un local o <a href="#" onclick="window.fetchData()" style="color:white; text-decoration:underline;">RECARGAR</a></p>` : ''}
+          
+          ${state.user?.role === 'admin' ? `
+            <p style="opacity: 0.8; font-size: 13px; font-weight: 600;">BALANCE TURNO ACTUAL</p>
+            <h2 style="font-size: 38px; font-weight: 800; margin: 10px 0;">${formatCurrency(profit)}</h2>
+            <div class="pill" style="background:rgba(16,185,129,0.2); border:1.5px solid rgba(16,185,129,0.5); font-size:12px; padding:10px 18px; display:inline-flex; align-items:center; gap:8px; border-radius:12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+              <span style="width:10px; height:10px; border-radius:50%; background:#10b981; box-shadow: 0 0 8px #10b981;"></span>
+              <span style="color:#34d399; font-weight:900; letter-spacing:1.5px; font-size:13px; text-shadow: 0 0 4px rgba(52,211,153,0.3);">ADMINISTRADOR</span>
+            </div>
+          ` : `
+            <p style="opacity: 0.8; font-size: 13px; font-weight: 600; text-transform: uppercase;">
+              ${state.timeFilter === 'daily' ? (activeUserShift ? 'TOTAL VENDIDO EN ESTE TURNO' : 'TOTAL VENDIDO HOY') : state.timeFilter === 'weekly' ? 'TOTAL VENDIDO ESTA SEMANA' : 'TOTAL VENDIDO ESTE MES'}
+            </p>
+            <h2 style="font-size: 38px; font-weight: 800; margin: 10px 0; color: #ffffff;">${formatCurrency(totalIncome)}</h2>
+            <div class="pill" style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); font-size:12px; padding:8px 15px; display:inline-flex; align-items:center; gap:8px;">
+              <span style="width:8px; height:8px; border-radius:50%; background:${state.currentBusinessId !== 'all' ? '#10b981' : '#f59e0b'};"></span>
+              ${state.businesses.find(b => b.id === state.currentBusinessId)?.name || 'Sin local asignado'}
+            </div>
+          `}
+          ${state.currentBusinessId === 'all' && state.user?.role !== 'admin' ? `<p style="font-size:10px; color:rgba(255,255,255,0.6); margin-top:5px; display:flex; align-items:center; gap:5px;"><i data-lucide="alert-circle" style="width:12px;"></i> Pide al Admin que te asigne un local o <a href="#" onclick="window.fetchData()" style="color:white; text-decoration:underline;">RECARGAR</a></p>` : ''}
         </div>
 
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:12px; margin-bottom:25px;">
@@ -2551,7 +2857,10 @@ const render = () => {
           ${(state.user?.role === 'admin' || state.user?.is_cashier) ? `
             <button onclick="window.openModal('expense')" class="btn-primary" style="padding:15px;">+ GASTO</button>
           ` : ''}
-          <button onclick="window.showShiftReport()" class="btn-primary" style="padding:15px; background:#475569;">📄 REPORTE TURNO</button>
+          ${state.user?.is_cashier ? `
+            <button onclick="window.openModal('cash_closure')" class="btn-primary" style="padding:15px; background:#0f766e;">💵 CIERRE CAJA</button>
+          ` : ''}
+          <button onclick="window.showShiftReport()" class="btn-primary" style="padding:15px; background:#475569;">📄 REPORTE POR VENDEDOR</button>
           ${(state.user?.role === 'admin' || state.user?.can_manage_inventory) ? `
             <button onclick="state.activeModal='new_product';render()" class="btn-primary" style="padding:15px; background:var(--primary);">+ NUEVO PROD</button>
           ` : ''}
@@ -2559,7 +2868,7 @@ const render = () => {
 
         <div class="activity-section">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-            <h3 style="font-size:18px; font-weight:700;">Actividad Reciente</h3>
+            <h3 style="font-size:18px; font-weight:700;">${state.user?.role !== 'admin' && state.timeFilter === 'daily' && activeUserShift ? 'Ventas del Turno' : 'Actividad Reciente'}</h3>
             <select class="btn-secondary" style="padding:6px 12px; font-size:12px;" onchange="state.timeFilter=this.value;render()">
               <option value="daily" ${state.timeFilter==='daily'?'selected':''}>Hoy</option>
               <option value="weekly" ${state.timeFilter==='weekly'?'selected':''}>Semana</option>
@@ -2567,7 +2876,7 @@ const render = () => {
           </div>
           
           <div class="card" style="padding:10px;">
-            ${timeFilteredTrx.length === 0 ? `<p style="text-align:center; padding:20px; color:var(--text-muted);">Sin movimientos hoy</p>` : timeFilteredTrx.map(t=>`
+            ${timeFilteredTrx.length === 0 ? `<p style="text-align:center; padding:20px; color:var(--text-muted);">${state.user?.role !== 'admin' && state.timeFilter === 'daily' && activeUserShift ? 'Sin ventas registradas en este turno' : 'Sin movimientos'}</p>` : timeFilteredTrx.map(t=>`
               <div class="transaction-item" style="display:flex; justify-content:space-between; align-items:center; padding:12px; border-bottom:1px solid #f1f5f9;">
                 <div style="display:flex; align-items:center; gap:12px;">
                   <div style="width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; background:${t.type==='income'?'rgba(16,185,129,0.1)':'rgba(239,68,68,0.1)'}; color:${t.type==='income'?'var(--success)':'var(--danger)'}; font-size:18px;">
@@ -2924,11 +3233,11 @@ const render = () => {
 
     ${state.activeModal === 'shift_report' ? `
     <div class="modal-overlay">
-      <div class="modal-card card" style="max-width:420px; background:#0f172a; color:white; border:1px solid rgba(255,255,255,0.1); border-radius:24px;">
+      <div class="modal-card card" style="max-width:420px; max-height:90vh; overflow-y:auto; background:#0f172a; color:white; border:1px solid rgba(255,255,255,0.1); border-radius:24px;">
         <div class="modal-close" onclick="state.activeModal=null;render()" style="background:rgba(255,255,255,0.1); color:white;">✕</div>
         <div style="text-align:center; padding:10px 0;">
-          <h2 style="font-size:20px; font-weight:800; color:white;">Resumen de Turno</h2>
-          <p style="font-size:11px; opacity:0.6; color:#94a3b8; margin-top:2px;">Detalle de actividad</p>
+          <h2 style="font-size:20px; font-weight:800; color:white;">Reporte por Vendedor</h2>
+          <p style="font-size:12px; color:#38bdf8; font-weight:700; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px;">👤 ${state.user?.name || 'Colaborador'}</p>
         </div>
 
         <div class="form-group" style="margin-bottom: 15px;">
@@ -2943,20 +3252,18 @@ const render = () => {
         <div style="display:flex; flex-direction:column; gap:12px; padding:10px 0;">
           <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); padding:16px; border-radius:18px; display:flex; justify-content:space-between; align-items:center;">
             <div>
-              <p style="font-size:11px; color:#34d399; font-weight:700; text-transform:uppercase;">Ventas Realizadas</p>
+              <p style="font-size:11px; color:#38bdf8; font-weight:700; text-transform:uppercase;">Ventas Realizadas</p>
               <p style="font-size:11px; opacity:0.6; margin-top:2px; color:#94a3b8;">${state.shiftReportData?.count || 0} movimientos</p>
             </div>
-            <p style="font-size:20px; font-weight:800; color:#34d399;">+ ${formatCurrency(state.shiftReportData?.totalSales || 0)}</p>
-          </div>
-
-          <div style="background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08); padding:16px; border-radius:18px; display:flex; justify-content:space-between; align-items:center;">
-            <p style="font-size:11px; color:#f87171; font-weight:700; text-transform:uppercase;">Gastos Registrados</p>
-            <p style="font-size:20px; font-weight:800; color:#f87171;">- ${formatCurrency(state.shiftReportData?.totalExpenses || 0)}</p>
+            <p style="font-size:20px; font-weight:800; color:#ffffff;">+ ${formatCurrency(state.shiftReportData?.totalSales || 0)}</p>
           </div>
 
           <div style="background:rgba(56,189,248,0.08); border:1px dashed rgba(56,189,248,0.3); padding:18px; border-radius:18px; display:flex; justify-content:space-between; align-items:center; margin-top:5px;">
-            <span style="font-size:12px; font-weight:700; color:#e2e8f0;">Total Neto en Caja</span>
-            <span style="font-size:22px; font-weight:900; color:${(state.shiftReportData?.balance || 0) >= 0 ? '#34d399' : '#f87171'};">${formatCurrency(state.shiftReportData?.balance || 0)}</span>
+            <div style="display:flex; flex-direction:column;">
+              <span style="font-size:12px; font-weight:700; color:#e2e8f0;">Total Vendido</span>
+              <span style="font-size:10px; color:#94a3b8; margin-top:1px;">Rendimiento del vendedor</span>
+            </div>
+            <span style="font-size:22px; font-weight:900; color:#ffffff;">${formatCurrency(state.shiftReportData?.totalSales || 0)}</span>
           </div>
         </div>
 
@@ -2965,6 +3272,132 @@ const render = () => {
         </div>
       </div>
     </div>` : ''}
+
+    ${state.activeModal === 'cash_closure' ? (() => {
+      const closureDateStr = new Date().toLocaleDateString('en-CA');
+      const closureExpenses = state.transactions.filter(t => {
+        if (t.type !== 'expense') return false;
+        if (t.business_id !== state.selectedClosureBusinessId) return false;
+        const tDate = new Date(t.date).toLocaleDateString('en-CA');
+        return tDate === closureDateStr;
+      });
+      const totalClosureExpenses = closureExpenses.reduce((sum, e) => sum + Number(e.amount), 0);
+
+      return `
+      <div class="modal-overlay">
+        <div class="modal-card card" style="max-width:450px; background:#0f172a; color:white; border:1px solid rgba(255,255,255,0.1); border-radius:24px; padding:25px; max-height:90vh; overflow-y:auto;">
+          <div class="modal-close" onclick="state.activeModal=null;render()" style="background:rgba(255,255,255,0.1); color:white;">✕</div>
+          
+          <div style="text-align:center; padding:10px 0; margin-bottom:15px;">
+            <h2 style="font-size:22px; font-weight:900; color:white; display:flex; align-items:center; justify-content:center; gap:8px;">
+              💵 Cierre de Caja
+            </h2>
+            <p style="font-size:12px; color:#94a3b8; margin-top:4px;">Registro consolidado de ventas del día</p>
+          </div>
+
+          <form onsubmit="window.saveCashClosure(event)">
+            ${state.user?.role === 'admin' ? `
+              <div class="form-group" style="margin-bottom:12px;">
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Local / Sede</label>
+                <select name="business_id" onchange="state.selectedClosureBusinessId = this.value; render()" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required>
+                  <option value="">Selecciona sede...</option>
+                  ${state.businesses.map(b => `<option value="${b.id}" ${state.selectedClosureBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+                </select>
+              </div>
+            ` : ''}
+
+            <!-- 💸 DETALLE DE GASTOS DEL DÍA -->
+            <div style="background:rgba(239,68,68,0.05); border:1px dashed rgba(239,68,68,0.2); padding:15px; border-radius:18px; margin-bottom:15px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                <span style="font-size:11px; font-weight:700; color:#f87171; text-transform:uppercase; letter-spacing:0.5px;">💸 Gastos Registrados Hoy</span>
+                <span style="font-size:16px; font-weight:800; color:#f87171;">-${formatCurrency(totalClosureExpenses)}</span>
+              </div>
+              ${closureExpenses.length === 0 ? `
+                <p style="font-size:11px; color:#94a3b8; font-style:italic; margin:0; text-align:center; padding:5px 0;">No hay gastos registrados hoy para esta sede.</p>
+              ` : `
+                <div style="max-height:100px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-top:5px; padding-right:5px;">
+                  ${closureExpenses.map((e, idx) => `
+                    <div style="display:flex; justify-content:space-between; align-items:start; font-size:11px; padding:6px 8px; background:rgba(255,255,255,0.02); border-radius:8px; border:1px solid rgba(255,255,255,0.04);">
+                      <div style="display:flex; flex-direction:column; max-width:70%;">
+                        <span style="font-weight:700; color:#e2e8f0;">${idx + 1}. ${state.categories.find(c => c.id === e.category_id)?.name || 'Gasto General'}</span>
+                        ${e.description ? `<span style="color:#94a3b8; font-size:10px; margin-top:1px;">📝 ${e.description}</span>` : ''}
+                      </div>
+                      <span style="font-weight:700; color:#f87171;">-${formatCurrency(e.amount)}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              `}
+            </div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+              <div class="form-group">
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Efectivo ($)</label>
+                <input type="number" name="cash_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+              </div>
+              
+              <div class="form-group">
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Daviplata ($)</label>
+                <input type="number" name="daviplata_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+              </div>
+
+              <div class="form-group">
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Addi ($)</label>
+                <input type="number" name="addi_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+              </div>
+
+              <div class="form-group">
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Sistecrédito ($)</label>
+                <input type="number" name="sistecredito_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top:12px;">
+              <label style="color:#94a3b8; font-size:11px; font-weight:700;">Nequi / Transferencia ($)</label>
+              <input type="number" name="nequi_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+            </div>
+
+            <!-- ➕ SECCIÓN DE GASTOS EXTRAS / ALCANCÍA -->
+            <div style="border-top:1px dashed rgba(255,255,255,0.15); margin-top:15px; padding-top:15px;">
+              <h4 style="font-size:12px; font-weight:800; color:#38bdf8; text-transform:uppercase; margin:0 0 12px 0; letter-spacing:0.5px; display:flex; align-items:center; gap:6px;">
+                <span>➕ Egresos Extras / Ahorros</span>
+              </h4>
+              
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
+                <div class="form-group">
+                  <label style="color:#94a3b8; font-size:11px; font-weight:700;">Otros Gastos ($)</label>
+                  <input type="number" name="other_expenses_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" min="0" placeholder="0" value="0">
+                </div>
+                <div class="form-group">
+                  <label style="color:#94a3b8; font-size:11px; font-weight:700;">Alcancía (Ahorro) ($)</label>
+                  <input type="number" name="savings_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" min="0" placeholder="0" value="0">
+                </div>
+              </div>
+
+              <div class="form-group" style="margin-top:8px;">
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Descripción Otros Gastos</label>
+                <input type="text" name="other_expenses_description" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" placeholder="Ej: Transporte extra, tintos...">
+              </div>
+
+              <div class="form-group" style="margin-top:8px;">
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Descripción Alcancía / Ahorro</label>
+                <input type="text" name="savings_description" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" placeholder="Ej: Ahorro diario para base...">
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top:12px;">
+              <label style="color:#94a3b8; font-size:11px; font-weight:700;">Observaciones / Novedades</label>
+              <textarea name="observations" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white; min-height:60px; resize:vertical;" placeholder="Escribe observaciones o diferencias detectadas..."></textarea>
+            </div>
+
+            <div style="display:flex; gap:10px; margin-top:20px;">
+              <button class="btn-primary" style="flex:2; background:#0f766e; border:none; padding:12px; font-weight:700;">REGISTRAR CIERRE</button>
+              <button type="button" onclick="state.activeModal=null;render()" class="btn-primary" style="flex:1; background:#475569; border:none; padding:12px; font-weight:700;">CANCELAR</button>
+            </div>
+          </form>
+        </div>
+      </div>
+      `;
+    })() : ''}
 
     ${state.activeModal === 'supplier_ledger' ? (() => {
       const s = state.suppliers[state.selectedSupplierIdx];
@@ -3120,6 +3553,239 @@ const render = () => {
         </form>
       </div>
     </div>` : ''}
+
+    ${state.activeModal === 'collab_analytics' ? (() => {
+      const empId = state.selectedCollabId;
+      const emp = state.employees.find(e => e.id === empId) || (empId === state.user.id ? state.user : null);
+      if (!emp) return '';
+
+      // Obtener el año y mes seleccionado para el calendario
+      if (state.collabCalendarYear === undefined) {
+        const d = new Date();
+        state.collabCalendarYear = d.getFullYear();
+        state.collabCalendarMonth = d.getMonth();
+      }
+      
+      const calYear = state.collabCalendarYear;
+      const calMonth = state.collabCalendarMonth;
+      
+      const ventaCatId = state.categories.find(c => c.name === 'Venta' && c.type === 'income')?.id;
+
+      // Filtrar transacciones del empleado
+      const empTx = state.transactions.filter(t => {
+        const isEmployee = (t.user_id === emp.id) || (emp.id === state.user.id && !t.user_id);
+        const isSale = t.type === 'income' && (t.category_id === ventaCatId || t.description?.includes('Venta POS'));
+        return isEmployee && isSale;
+      });
+
+      // Métricas clave del empleado (Totales del mes seleccionado)
+      const monthPrefix = `${calYear}-${String(calMonth + 1).padStart(2, '0')}`;
+      const monthTx = empTx.filter(t => t.date.startsWith(monthPrefix));
+
+      const totalVendido = monthTx.reduce((sum, t) => sum + Number(t.amount), 0);
+      const totalTransacciones = monthTx.length;
+      const ticketPromedio = totalTransacciones > 0 ? totalVendido / totalTransacciones : 0;
+      const maxTicket = totalTransacciones > 0 ? Math.max(...monthTx.map(t => Number(t.amount))) : 0;
+
+      // Mapear ventas por día
+      const salesByDay = {}; // día -> { count, total }
+      monthTx.forEach(t => {
+        const day = parseInt(t.date.split('-')[2], 10);
+        if (!salesByDay[day]) salesByDay[day] = { count: 0, total: 0 };
+        salesByDay[day].count += 1;
+        salesByDay[day].total += Number(t.amount);
+      });
+
+      // Generar días del calendario
+      const monthNames = [
+        'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+        'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+      ];
+      
+      // Primer día del mes
+      const firstDayDate = new Date(calYear, calMonth, 1);
+      const startDayIndex = firstDayDate.getDay(); 
+      const totalDays = new Date(calYear, calMonth + 1, 0).getDate();
+
+      // Generar la grilla
+      const calendarCells = [];
+      for (let i = 0; i < startDayIndex; i++) {
+        calendarCells.push(null);
+      }
+      for (let day = 1; day <= totalDays; day++) {
+        calendarCells.push(day);
+      }
+
+      const selectedDay = state.collabSelectedCalDay || null;
+      const dayTx = selectedDay ? monthTx.filter(t => parseInt(t.date.split('-')[2], 10) === selectedDay) : [];
+
+      return `
+      <div class="modal-overlay" style="display:flex; align-items:center; justify-content:center; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15,23,42,0.6); backdrop-filter:blur(4px); z-index:9999; padding:20px; overflow-y:auto;">
+        <div class="modal-card card" style="max-width:700px; width:100%; max-height:90vh; overflow-y:auto; padding:25px; border-radius:24px; position:relative; background:white; box-shadow:0 20px 40px rgba(0,0,0,0.15);">
+          <div class="modal-close" onclick="state.activeModal=null;state.collabSelectedCalDay=null;render()" style="position:absolute; top:20px; right:20px; font-size:24px; cursor:pointer; color:#64748b; font-weight:bold; transition:all 0.15s;">✕</div>
+          
+          <!-- Header Perfil -->
+          <div style="display:flex; align-items:center; gap:16px; margin-bottom:25px; border-bottom:1px solid #f1f5f9; padding-bottom:20px;">
+            <div style="width:56px; height:56px; border-radius:50%; background:linear-gradient(135deg, var(--primary), var(--secondary)); color:white; display:flex; align-items:center; justify-content:center; font-weight:800; font-size:20px; box-shadow:0 4px 10px rgba(59,130,246,0.2);">
+              ${emp.name.substring(0, 2).toUpperCase()}
+            </div>
+            <div>
+              <h2 style="margin:0; font-size:20px; color:#1f2937;">${emp.name}</h2>
+              <p style="margin:0 0 4px 0; font-size:12px; color:#64748b;">${emp.email || 'Sin correo registrado'} · <span style="font-weight:700; color:var(--primary);">${emp.role?.toUpperCase() || 'COLABORADOR'}</span></p>
+              <div style="display:flex; gap:6px;">
+                <span style="font-size:10px; background:#f0fdf4; color:#16a34a; border:1px solid #bbf7d0; padding:2px 8px; border-radius:20px; font-weight:700;">
+                  ${totalTransacciones > 10 ? '🔥 Vendedor Activo' : '👤 Colaborador'}
+                </span>
+                ${ticketPromedio > 200000 ? `
+                  <span style="font-size:10px; background:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; padding:2px 8px; border-radius:20px; font-weight:700;">
+                    📈 Ticket Alto
+                  </span>
+                ` : ''}
+              </div>
+            </div>
+          </div>
+
+          <!-- Métricas Grid -->
+          <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:12px; margin-bottom:25px;">
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Venta del Mes</p>
+              <h3 style="margin:0; font-size:18px; color:#10b981; font-weight:800;">${formatCurrency(totalVendido)}</h3>
+            </div>
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Promedio x Venta</p>
+              <h3 style="margin:0; font-size:18px; color:var(--primary); font-weight:800;">${formatCurrency(ticketPromedio)}</h3>
+            </div>
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Transacciones</p>
+              <h3 style="margin:0; font-size:18px; color:#4f46e5; font-weight:800;">${totalTransacciones}</h3>
+            </div>
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:16px; padding:15px; text-align:center;">
+              <p style="margin:0 0 5px 0; font-size:11px; color:#64748b; font-weight:600; text-transform:uppercase; letter-spacing:0.5px;">Venta Máxima</p>
+              <h3 style="margin:0; font-size:18px; color:#d97706; font-weight:800;">${formatCurrency(maxTicket)}</h3>
+            </div>
+          </div>
+
+          <!-- Calendario y Detalle Diario (2 Columnas) -->
+          <div style="display:grid; grid-template-columns: 1fr; gap:20px; margin-bottom:20px;">
+            
+            <!-- Calendario de Ventas -->
+            <div style="background:#f8fafc; border:1px solid #f1f5f9; border-radius:20px; padding:20px;">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+                <h4 style="margin:0; font-size:14px; color:#334155; font-weight:800; display:flex; align-items:center; gap:6px;">
+                  <i data-lucide="calendar" style="width:16px; color:var(--primary);"></i> Calendario de Ventas
+                </h4>
+                <div style="display:flex; align-items:center; gap:10px;">
+                  <button onclick="window.changeCollabCalendarMonth(-1)" style="background:white; border:1px solid #cbd5e1; border-radius:8px; width:28px; height:28px; cursor:pointer; font-weight:bold; color:#475569;">◀</button>
+                  <span style="font-size:13px; font-weight:800; color:#334155; min-width:110px; text-align:center;">${monthNames[calMonth]} ${calYear}</span>
+                  <button onclick="window.changeCollabCalendarMonth(1)" style="background:white; border:1px solid #cbd5e1; border-radius:8px; width:28px; height:28px; cursor:pointer; font-weight:bold; color:#475569;">▶</button>
+                </div>
+              </div>
+
+              <!-- Cabecera de Días de la Semana -->
+              <div style="display:grid; grid-template-columns: repeat(7, 1fr); gap:6px; text-align:center; font-weight:700; font-size:11px; color:#64748b; margin-bottom:8px;">
+                <span>Dom</span><span>Lun</span><span>Mar</span><span>Mié</span><span>Jue</span><span>Vie</span><span>Sáb</span>
+              </div>
+
+              <!-- Grilla de Días -->
+              <div style="display:grid; grid-template-columns: repeat(7, 1fr); gap:6px;">
+                ${calendarCells.map(day => {
+                  if (day === null) {
+                    return `<div style="aspect-ratio: 1; border-radius:10px; background:transparent;"></div>`;
+                  }
+                  
+                  const sales = salesByDay[day];
+                  const hasSales = !!sales;
+                  const isSelected = selectedDay === day;
+                  
+                  let cellBg = 'white';
+                  let cellColor = '#334155';
+                  let border = '1px solid #e2e8f0';
+                  
+                  if (hasSales) {
+                    if (sales.total > 400000) {
+                      cellBg = '#047857';
+                      cellColor = 'white';
+                      border = 'none';
+                    } else if (sales.total > 150000) {
+                      cellBg = '#10b981';
+                      cellColor = 'white';
+                      border = 'none';
+                    } else {
+                      cellBg = '#d1fae5';
+                      cellColor = '#065f46';
+                      border = 'none';
+                    }
+                  }
+
+                  if (isSelected) {
+                    border = '3px solid var(--primary)';
+                  }
+
+                  return `
+                    <div onclick="${hasSales ? `state.collabSelectedCalDay=${day};render()` : ''}" 
+                      title="${hasSales ? `${sales.count} ventas - Total: ${formatCurrency(sales.total)}` : 'Sin ventas'}"
+                      style="aspect-ratio: 1; border-radius:10px; background:${cellBg}; color:${cellColor}; border:${border}; display:flex; flex-direction:column; align-items:center; justify-content:center; font-size:12px; font-weight:700; cursor:${hasSales ? 'pointer' : 'default'}; transition:all 0.15s ease; position:relative; box-shadow:${isSelected ? '0 0 10px rgba(59,130,246,0.3)' : 'none'};">
+                      <span>${day}</span>
+                      ${hasSales ? `<span style="font-size:7px; font-weight:800; opacity:0.9; margin-top:2px;">$${Math.round(sales.total / 1000)}k</span>` : ''}
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+
+            <!-- Detalle de Ventas del Día Seleccionado -->
+            <div style="background:white; border:1px solid #f1f5f9; border-radius:20px; padding:20px; box-shadow:0 4px 6px rgba(0,0,0,0.02);">
+              <h4 style="margin:0 0 15px 0; font-size:14px; color:#334155; font-weight:800; display:flex; align-items:center; justify-content:space-between;">
+                <span>
+                  <i data-lucide="receipt" style="width:16px; color:var(--success); vertical-align:middle; margin-right:4px;"></i> 
+                  Ventas del ${selectedDay ? `${selectedDay} de ${monthNames[calMonth]}` : 'Mes'}
+                </span>
+                <span style="font-size:11px; background:#f1f5f9; color:#475569; padding:2px 8px; border-radius:10px;">
+                  ${dayTx.length || monthTx.length} registros
+                </span>
+              </h4>
+
+              <div style="display:flex; flex-direction:column; gap:10px; max-height:280px; overflow-y:auto; padding-right:5px;">
+                ${(() => {
+                  const txList = selectedDay ? dayTx : monthTx;
+                  if (txList.length === 0) {
+                    return `
+                      <div style="text-align:center; padding:40px 20px; color:#94a3b8;">
+                        <span style="font-size:32px;">📭</span>
+                        <p style="margin:10px 0 0 0; font-size:12px; font-weight:600;">Ninguna venta registrada para esta fecha.</p>
+                      </div>
+                    `;
+                  }
+
+                  return txList.map(t => {
+                    const timeStr = t.timestamp ? new Date(t.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Hora N/A';
+                    return `
+                      <div style="display:flex; justify-content:space-between; align-items:center; padding:12px; background:#f8fafc; border-radius:12px; border:1px solid #f1f5f9; transition:all 0.15s ease;">
+                        <div>
+                          <p style="margin:0; font-weight:700; font-size:12px; color:#1e293b;">${t.description || 'Venta POS'}</p>
+                          <span style="font-size:10px; color:#94a3b8;">📅 ${t.date} · 🕒 ${timeStr} · 💳 ${t.payment_method || 'Efectivo'}</span>
+                        </div>
+                        <span style="font-weight:800; font-size:13px; color:#10b981;">+ ${formatCurrency(t.amount)}</span>
+                      </div>
+                    `;
+                  }).join('');
+                })()}
+              </div>
+            </div>
+
+          </div>
+
+          <div style="display:flex; justify-content:flex-end;">
+            <button onclick="state.activeModal=null;state.collabSelectedCalDay=null;render()" 
+              class="btn-primary" 
+              style="background:#64748b; border:none; padding:10px 20px; color:#f1f5f9; border-radius:12px; font-weight:700; font-size:13px; cursor:pointer;">
+              Cerrar Analíticas
+            </button>
+          </div>
+        </div>
+      </div>
+      `;
+    })() : ''}
   `;
 
   const toastHtml = `<div id="toast-container"></div>`;
@@ -5594,45 +6260,78 @@ window.registerGeolocation = async (type) => {
       }
     }
 
-    const permissions = await Geolocation.checkPermissions();
-    if (permissions.location !== 'granted') {
-      const request = await Geolocation.requestPermissions();
-      if (request.location !== 'granted') {
-        window.showToast("Permiso de GPS denegado. Es necesario para marcar.", "danger");
-        state.loading = false;
-        render();
-        return;
+    try {
+      const permissions = await Geolocation.checkPermissions();
+      if (permissions.location !== 'granted') {
+        const request = await Geolocation.requestPermissions();
+        if (request.location !== 'granted') {
+          window.showToast("Permiso de GPS denegado. Es necesario para marcar.", "danger");
+          state.loading = false;
+          render();
+          return;
+        }
       }
+    } catch (permErr) {
+      console.warn("[GPS] Fallo comprobación de permisos, intentando de todas formas:", permErr);
     }
 
-    // 🎯 FILTRO DE PRECISIÓN TRIPLE (Eliminación de Ruido GPS)
+    // 🎯 FILTRO DE PRECISIÓN TRIPLE CON FALLBACK Y TIMEOUT ESTRICTO (Eliminación de Ruido GPS)
     const samples = [];
-    const maxRetries = 5;
+    const maxRetries = 6;
     let attempts = 0;
+    let gotTimeout = false;
 
-    window.showToast("📡 Estabilizando señal GPS (3 muestras)...", "info");
+    window.showToast("📡 Estabilizando señal GPS...", "info");
 
-    while (samples.length < 3 && attempts < maxRetries) {
+    while (samples.length < 3 && attempts < maxRetries && !gotTimeout) {
       try {
-        const pos = await Geolocation.getCurrentPosition({ 
-          enableHighAccuracy: true, 
-          maximumAge: 0, 
-          timeout: 10000 
-        });
+        // Envolver en un timeout estricto de JS de 4.5 segundos para evitar colgaduras nativas permanentes
+        const pos = await Promise.race([
+          Geolocation.getCurrentPosition({ 
+            enableHighAccuracy: true, 
+            maximumAge: 0, 
+            timeout: 4000 
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_GPS")), 4500))
+        ]);
         
-        // Solo aceptar muestras con precisión razonable (< 50m) para el promedio
-        if (pos.coords.accuracy < 50) {
+        const accuracy = pos.coords.accuracy || 10;
+        if (accuracy < 150) {
           samples.push(pos.coords);
+        } else {
+          console.warn("[GPS] Muestra ignorada por baja precisión:", accuracy);
         }
       } catch (err) {
-        console.warn("Fallo lectura GPS temporal:", err);
+        console.warn("[GPS] Fallo de lectura temporal:", err);
+        if (err.message === "TIMEOUT_GPS" || err.message?.includes("location disabled") || err.message?.includes("provider")) {
+          gotTimeout = true; // Salir de inmediato si hay un cuelgue o está apagado el GPS
+        }
       }
       attempts++;
-      if (samples.length < 3) await new Promise(r => setTimeout(r, 800)); // Breve pausa entre capturas
+      if (samples.length < 3 && !gotTimeout) await new Promise(r => setTimeout(r, 500));
+    }
+
+    // FALLBACK DE SEGURIDAD: Si no pudimos recolectar 3 muestras de alta precisión, pero tenemos al menos una lectura
+    if (samples.length === 0) {
+      window.showToast("🔄 Buscando señal GPS alternativa...", "info");
+      try {
+        // Intentar lectura rápida usando el proveedor de red/Wi-Fi y permitiendo caché
+        const pos = await Promise.race([
+          Geolocation.getCurrentPosition({ 
+            enableHighAccuracy: false, 
+            maximumAge: 15000, 
+            timeout: 4000 
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_FALLBACK")), 4500))
+        ]);
+        samples.push(pos.coords);
+      } catch (err) {
+        console.error("[GPS] Fallo definitivo obteniendo ubicación:", err);
+      }
     }
 
     if (samples.length === 0) {
-      window.showToast("🚫 No se pudo obtener una señal GPS estable. Intenta en un lugar más abierto.", "danger");
+      window.showToast("🚫 No se pudo obtener una señal GPS estable. Revisa si tienes el GPS activo e intenta de nuevo.", "danger");
       state.loading = false;
       render();
       return;
@@ -5656,22 +6355,28 @@ window.registerGeolocation = async (type) => {
       let isOutside = false;
 
       if (polyConfig && polyConfig.polygon && polyConfig.polygon.length >= 3) {
-        // Validación exacta por POLÍGONO
-        const inside = window.isPointInPolygon([coords.lat, coords.lng], polyConfig.polygon);
-        
-        if (!inside) {
-          // Si está fuera del polígono, chequear si está dentro del BUFFER de tolerancia
-          // Para simplificar: chequear distancia al centro si el polígono falla
-          const distToCenter = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
-          const tolerance = polyConfig.buffer || 30;
+        try {
+          // Validación exacta por POLÍGONO
+          const inside = window.isPointInPolygon([coords.lat, coords.lng], polyConfig.polygon);
           
-          // Nota: Lo ideal sería distancia al borde del polígono, pero dist al centro + buffer es una buena aproximación táctica
-          if (distToCenter > tolerance + 20) { // +20m de margen por GPS drift
-             isOutside = true;
+          if (!inside) {
+            // Si está fuera del polígono, chequear si está dentro del BUFFER de tolerancia
+            const distToCenter = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
+            const tolerance = polyConfig.buffer || 30;
+            if (distToCenter > tolerance + 20) { // +20m de margen por GPS drift
+               isOutside = true;
+            }
+          }
+        } catch (polyErr) {
+          console.error("[GPS] Error en validación por polígono, haciendo fallback a clásica:", polyErr);
+          if (biz.lat && biz.lng && biz.lat !== 0 && biz.lng !== 0) {
+            const distanceMeters = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
+            const maxRadius = biz.geofence_radius_meters || 100;
+            isOutside = distanceMeters > maxRadius;
           }
         }
-      } else if (biz.lat && biz.lng) {
-        // Fallback a validación circular clásica
+      } else if (biz.lat && biz.lng && biz.lat !== 0 && biz.lng !== 0) {
+        // Fallback a validación circular clásica (Evitando la trampa de la isla nula 0,0)
         const distanceMeters = window.getDistanceInMeters(coords.lat, coords.lng, biz.lat, biz.lng);
         const maxRadius = biz.geofence_radius_meters || 100;
         isOutside = distanceMeters > maxRadius;
@@ -5695,7 +6400,12 @@ window.registerGeolocation = async (type) => {
       
       if (error) {
          if (error.message?.includes('fetch') || error.code === 'PGRST301' || error.message?.includes('Failed to fetch')) throw error;
-         else { window.showToast(`Error en BD: ${error.message}`, "danger"); return; }
+         else { 
+           window.showToast(`Error en BD: ${error.message}`, "danger"); 
+           state.loading = false;
+           render();
+           return; 
+         }
       }
       window.showToast(`✅ ${eventType} registrada con éxito. (Precisión: ${Math.round(coords.accuracy)}m)`, "success");
     } catch(dbErr) {
@@ -5782,3 +6492,89 @@ document.addEventListener('visibilitychange', async () => {
      }
   }
 });
+
+// 📊 COMPONENTES GLOBALES DE ANALÍTICA DE COLABORADORES (v1.8.0)
+window.openCollabAnalytics = (userId) => {
+  state.selectedCollabId = userId;
+  state.collabSelectedCalDay = null; // Reiniciar día seleccionado
+  state.activeModal = 'collab_analytics';
+  render();
+};
+
+window.changeCollabCalendarMonth = (direction) => {
+  if (state.collabCalendarMonth === undefined) {
+    const d = new Date();
+    state.collabCalendarYear = d.getFullYear();
+    state.collabCalendarMonth = d.getMonth();
+  }
+  state.collabCalendarMonth += direction;
+  if (state.collabCalendarMonth > 11) {
+    state.collabCalendarMonth = 0;
+    state.collabCalendarYear += 1;
+  } else if (state.collabCalendarMonth < 0) {
+    state.collabCalendarMonth = 11;
+    state.collabCalendarYear -= 1;
+  }
+  state.collabSelectedCalDay = null; // Reiniciar día seleccionado al cambiar de mes
+  render();
+};
+
+window.saveCashClosure = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button[type="submit"]') || e.target.querySelector('button');
+  const originalHtml = btn ? btn.innerHTML : 'REGISTRAR CIERRE';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '⚡ Guardando cierre...';
+  }
+
+  const formData = new FormData(e.target);
+  
+  let bizId = state.activeShiftBusinessId || state.user?.business_id;
+  if (state.user?.role === 'admin') {
+    bizId = formData.get('business_id');
+  }
+
+  if (!bizId || bizId === 'all') {
+    window.showToast('❌ Error: No se pudo determinar el local o sede para el cierre.', 'danger');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+    return;
+  }
+
+  const payload = {
+    user_id: state.user.id,
+    business_id: bizId,
+    date: new Date().toLocaleDateString('en-CA'), // Formato YYYY-MM-DD local
+    cash_amount: parseFloat(formData.get('cash_amount')) || 0,
+    addi_amount: parseFloat(formData.get('addi_amount')) || 0,
+    sistecredito_amount: parseFloat(formData.get('sistecredito_amount')) || 0,
+    daviplata_amount: parseFloat(formData.get('daviplata_amount')) || 0,
+    nequi_amount: parseFloat(formData.get('nequi_amount')) || 0,
+    other_expenses_amount: parseFloat(formData.get('other_expenses_amount')) || 0,
+    other_expenses_description: formData.get('other_expenses_description') || '',
+    savings_amount: parseFloat(formData.get('savings_amount')) || 0,
+    savings_description: formData.get('savings_description') || '',
+    observations: formData.get('observations') || ''
+  };
+
+  try {
+    const { error } = await supabase.from('cash_closures').insert(payload);
+    if (error) throw error;
+
+    window.showToast('✅ Cierre de caja registrado exitosamente.', 'success');
+    state.activeModal = null;
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error("Error al guardar cierre de caja:", err);
+    window.showToast('❌ Error al guardar: ' + err.message, 'danger');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalHtml;
+    }
+  }
+};
