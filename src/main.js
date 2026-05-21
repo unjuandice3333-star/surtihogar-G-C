@@ -5159,10 +5159,19 @@ window.purgeStagingData = async () => {
     const { error: e7d } = await supabase.from('system_logs').delete().eq('type', 'CASH_CLOSURE');
     if (e7d) console.warn('[PURGE] CASH_CLOSURE:', e7d.message);
 
-    // 11. Cualquier log restante
+    // 11. Cualquier log restante (si RLS lo permite)
     await supabase.from('system_logs').delete().neq('id', '00000000-0000-0000-0000-000000000000');
 
-    window.showToast("🎯 BASE DE DATOS LIMPIA. GPS, ventas, auditoría y nómina borrados. Lista para producción.", "success");
+    // 12. MARCADOR LÓGICO DE PURGA: Debido a que Supabase RLS bloquea los DELETE en system_logs,
+    // insertamos un marcador para que la nómina y el mapa ignoren los datos anteriores a este punto.
+    await supabase.from('system_logs').insert({ 
+      type: 'PURGE_EVENT', 
+      module: 'sistema', 
+      message: 'Limpieza de pruebas ejecutada', 
+      user_id: state.user.id 
+    });
+
+    window.showToast("🎯 BASE DE DATOS LIMPIA. GPS, ventas, auditoría y nómina reiniciados. Lista para producción.", "success");
     
   } catch(err) {
     console.error("Purge execution error:", err);
@@ -5569,14 +5578,27 @@ window.calculatePayroll = async () => {
     const startLimit = new Date(state.payrollFilters.startDate + 'T00:00:00').toISOString();
     const endLimit = new Date(state.payrollFilters.endDate + 'T23:59:59').toISOString();
 
+    // 0. Obtener timestamp del último evento de "Limpiar Pruebas" para ignorar logs viejos bloqueados por RLS
+    const { data: purgeLogs } = await supabase.from('system_logs')
+      .select('timestamp')
+      .eq('type', 'PURGE_EVENT')
+      .order('timestamp', { ascending: false })
+      .limit(1);
+    const lastPurgeTime = purgeLogs?.[0]?.timestamp;
+
     // 1. Extraer bitácora de GPS dentro del rango temporal del calendario
-    const { data: gpsLogs } = await supabase
+    let gpsQuery = supabase
       .from('system_logs')
       .select('*')
       .eq('type', 'GEOLOCATION_TRACK')
       .gte('timestamp', startLimit)
-      .lte('timestamp', endLimit)
-      .order('timestamp', { ascending: true });
+      .lte('timestamp', endLimit);
+
+    if (lastPurgeTime) {
+      gpsQuery = gpsQuery.gt('timestamp', lastPurgeTime);
+    }
+
+    const { data: gpsLogs } = await gpsQuery.order('timestamp', { ascending: true });
 
     // Procesar para cada empleado
     state.employees.forEach(emp => {
