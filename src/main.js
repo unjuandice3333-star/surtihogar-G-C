@@ -432,7 +432,7 @@ window.saveBaratilloSale = async (e) => {
     
     const form = new FormData(e.target);
     const desc = form.get('description');
-    const amount = parseFloat(form.get('amount'));
+    const amount = window.getCleanNumber(form.get(''));
     const pm = form.get('payment_method');
     const bizId = state.activeShiftBusinessId || state.currentBusinessId;
     
@@ -485,7 +485,7 @@ window.saveTransaction = async (e, type) => {
     btn.innerHTML = '<span class="loading-spinner"></span> GUARDANDO...';
     
     const form = new FormData(e.target);
-    const amount = form.get('amount');
+    const amount = window.getCleanNumber(form.get('amount'));
     let note = form.get('note');
 
     // 1. Validar Usuario y Sesión
@@ -800,6 +800,31 @@ window.handleRegister = async (e) => {
 
 const formatCurrency = (val) => new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(val);
 
+window.getCleanNumber = (val) => {
+  if (!val) return 0;
+  return parseFloat(val.toString().replace(/\./g, '')) || 0;
+};
+
+const formatCurrencyInput = (val) => {
+  const clean = val.replace(/\D/g, '');
+  if (!clean) return '';
+  return parseInt(clean, 10).toLocaleString('es-CO');
+};
+
+document.addEventListener('input', (e) => {
+  if (e.target && e.target.classList.contains('currency-input')) {
+    const originalPosition = e.target.selectionStart;
+    const originalLength = e.target.value.length;
+    
+    e.target.value = formatCurrencyInput(e.target.value);
+    
+    const newLength = e.target.value.length;
+    let newPosition = originalPosition + (newLength - originalLength);
+    if (newPosition < 0) newPosition = 0;
+    
+    try { e.target.setSelectionRange(newPosition, newPosition); } catch(e){}
+  }
+});
 window.filterByBusiness = (id) => {
   state.currentBusinessId = id;
   render();
@@ -2575,7 +2600,14 @@ const render = () => {
                         <span style="background:#f8fafc; color:#475569; font-weight:800; font-size:11px; padding:4px 10px; border-radius:20px; border:1px solid #e2e8f0; white-space:nowrap;">${sale.payment_method || 'Efectivo'}</span>
                       </td>
                       <td style="padding:18px 20px; text-align:right; vertical-align:top;">
-                        <div style="font-weight:900; color:var(--success); font-size:15px; font-family:monospace;">${formatCurrency(sale.total)}</div>
+                        <div style="font-weight:900; color:var(--success); font-size:15px; font-family:monospace; display:flex; justify-content:flex-end; align-items:center; gap:8px;">
+                          ${formatCurrency(sale.total)}
+                          ${state.user?.role === 'admin' ? `
+                            <button onclick="window.openEditSaleModal('${sale.id}', ${sale.total})" style="background:none; border:none; padding:4px; cursor:pointer; color:#94a3b8; border-radius:4px; display:flex; align-items:center; justify-content:center; transition:0.2s;" onmouseover="this.style.background='#f1f5f9'; this.style.color='#0369a1'" onmouseout="this.style.background='none'; this.style.color='#94a3b8'" title="Editar monto de venta">
+                              <i data-lucide="edit-3" style="width:14px; height:14px;"></i>
+                            </button>
+                          ` : ''}
+                        </div>
                       </td>
                     </tr>
                   `;
@@ -2930,7 +2962,7 @@ const render = () => {
             </div>
             <div class="form-group">
               <label>Precio Final ($)</label>
-              <input type="number" name="amount" class="form-input" required placeholder="Ej: 50000" min="0" step="any">
+              <input type='text' inputmode='numeric' name="amount" class="form-input currency-input" required placeholder="Ej: 50000" min="0" step="any">
             </div>
             <div class="form-group">
               <label>Medio de Pago</label>
@@ -3011,7 +3043,7 @@ const render = () => {
                 <input type="hidden" name="business" value="${state.activeShiftBusinessId}">
               </div>
             `}
-            <div class="form-group"><label>Monto</label><input type="number" name="amount" class="form-input" placeholder="$ 0" required></div>
+            <div class="form-group"><label>Monto</label><input type='text' inputmode='numeric' name="amount" class="form-input currency-input" placeholder="$ 0" required></div>
             ${state.activeModal === 'expense' ? `
               <div class="form-group">
                 <label>Descripción / Motivo</label>
@@ -3049,7 +3081,7 @@ const render = () => {
           <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
             <div class="form-group">
               <label>Precio Unitario</label>
-              <input type="number" name="price" class="form-input" placeholder="$ 0" required>
+              <input type='text' inputmode='numeric' name="price" class="form-input currency-input" placeholder="$ 0" required>
             </div>
             <div class="form-group">
               <label>Cantidad</label>
@@ -3086,7 +3118,7 @@ const render = () => {
             </div>
             <div class="form-group">
               <label>Costo Unitario</label>
-              <input type="number" name="cost" class="form-input" placeholder="$ 0" required min="1">
+              <input type='text' inputmode='numeric' name="cost" class="form-input currency-input" placeholder="$ 0" required min="1">
             </div>
           </div>
           <div class="form-group">
@@ -3163,11 +3195,11 @@ const render = () => {
             <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
               <div class="form-group">
                 <label>Precio de Venta</label>
-                <input type="number" name="price" id="new-prod-price" value="${selP ? selP.price : ''}" class="form-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
+                <input type='text' inputmode='numeric' name="price" id="new-prod-price" value="${selP ? selP.price : ''}" class="form-input currency-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
               </div>
               <div class="form-group">
                 <label>Costo Base</label>
-                <input type="number" name="cost" id="new-prod-cost" class="form-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
+                <input type='text' inputmode='numeric' name="cost" id="new-prod-cost" class="form-input currency-input" placeholder="$ 0" required min="1" oninput="window.updateMarginCalc()">
               </div>
             </div>
 
@@ -3341,28 +3373,28 @@ const render = () => {
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
               <div class="form-group">
                 <label style="color:#94a3b8; font-size:11px; font-weight:700;">Efectivo ($)</label>
-                <input type="number" name="cash_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+                <input type='text' inputmode='numeric' name="cash_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
               </div>
               
               <div class="form-group">
                 <label style="color:#94a3b8; font-size:11px; font-weight:700;">Daviplata ($)</label>
-                <input type="number" name="daviplata_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+                <input type='text' inputmode='numeric' name="daviplata_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
               </div>
 
               <div class="form-group">
                 <label style="color:#94a3b8; font-size:11px; font-weight:700;">Addi ($)</label>
-                <input type="number" name="addi_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+                <input type='text' inputmode='numeric' name="addi_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
               </div>
 
               <div class="form-group">
                 <label style="color:#94a3b8; font-size:11px; font-weight:700;">Sistecrédito ($)</label>
-                <input type="number" name="sistecredito_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+                <input type='text' inputmode='numeric' name="sistecredito_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
               </div>
             </div>
 
             <div class="form-group" style="margin-top:12px;">
               <label style="color:#94a3b8; font-size:11px; font-weight:700;">Nequi / Transferencia ($)</label>
-              <input type="number" name="nequi_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+              <input type='text' inputmode='numeric' name="nequi_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
             </div>
 
             <!-- ➕ SECCIÓN DE GASTOS EXTRAS / ALCANCÍA -->
@@ -3374,11 +3406,11 @@ const render = () => {
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
                 <div class="form-group">
                   <label style="color:#94a3b8; font-size:11px; font-weight:700;">Otros Gastos ($)</label>
-                  <input type="number" name="other_expenses_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" min="0" placeholder="0" value="0">
+                  <input type='text' inputmode='numeric' name="other_expenses_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" min="0" placeholder="0" value="0">
                 </div>
                 <div class="form-group">
                   <label style="color:#94a3b8; font-size:11px; font-weight:700;">Alcancía (Ahorro) ($)</label>
-                  <input type="number" name="savings_amount" class="form-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" min="0" placeholder="0" value="0">
+                  <input type='text' inputmode='numeric' name="savings_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" min="0" placeholder="0" value="0">
                 </div>
               </div>
 
@@ -3451,7 +3483,7 @@ const render = () => {
               </div>
               <div>
                 <label style="font-size:10px; font-weight:700; color:#64748b;">Valor Gasto Factura ($)</label>
-                <input type="number" name="total_amount" class="form-input" placeholder="$ 0" required style="height:36px; font-size:12px; border-radius:8px;">
+                <input type='text' inputmode='numeric' name="total_amount" class="form-input currency-input" placeholder="$ 0" required style="height:36px; font-size:12px; border-radius:8px;">
               </div>
               <div style="grid-column:span 2; display:flex; gap:10px; align-items:flex-end; margin-top:5px;">
                 <div style="flex:1;">
@@ -3522,7 +3554,7 @@ const render = () => {
                   
                   ${debt > 0 ? `
                     <form onsubmit="window.saveInvoicePayment(event, '${inv.id}')" style="display:flex; gap:6px; align-items:center; flex-wrap:nowrap;">
-                      <input type="number" name="payment_amount" class="form-input" placeholder="$ Abonar" required style="height:32px; font-size:11px; width:95px; padding:0 8px; border-color:#cbd5e1; border-radius:8px;">
+                      <input type='text' inputmode='numeric' name="payment_amount" class="form-input currency-input" placeholder="$ Abonar" required style="height:32px; font-size:11px; width:95px; padding:0 8px; border-color:#cbd5e1; border-radius:8px;">
                       <button class="btn-primary" style="height:32px; font-size:10px; font-weight:800; padding:0 12px; background:#10b981; border-radius:8px; text-transform:uppercase; letter-spacing:0.5px;">Abonar</button>
                     </form>
                   ` : ''}
@@ -3795,6 +3827,32 @@ const render = () => {
       </div>
       `;
     })() : ''}
+
+    ${state.activeModal === 'edit_sale' ? `
+    <div class="modal-overlay">
+      <div class="modal-card card" style="max-width:400px;">
+        <div class="modal-close" onclick="state.activeModal=null;state.editingSaleId=null;render()">×</div>
+        <div style="text-align:center; margin-bottom:15px;">
+          <div style="background:#e0f2fe; color:#0284c7; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 10px;">
+            <i data-lucide="edit-3" style="width:24px; height:24px;"></i>
+          </div>
+          <h2 style="margin:0; font-size:18px; color:#0f172a; font-weight:800;">Modificar Venta</h2>
+          <p style="margin:5px 0 0 0; font-size:13px; color:#64748b;">Venta #${(state.editingSaleId || '').slice(0,8).toUpperCase()}</p>
+        </div>
+        
+        <form onsubmit="window.saveEditSale(event)">
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Nuevo Total de la Venta</label>
+            <input type='text' inputmode='numeric' name="new_total" class="form-input currency-input" value="${state.editingSaleTotal || ''}" required style="font-size:20px; font-weight:900; height:50px; text-align:center; color:var(--success);">
+            <p style="font-size:11px; color:#94a3b8; margin-top:6px; line-height:1.4;">
+              ⚠️ Esta acción modificará el total de la venta y ajustará automáticamente el ingreso registrado en caja para mantener el balance exacto.
+            </p>
+          </div>
+          <button type="submit" class="btn-primary" style="width:100%; height:45px; margin-top:20px; font-size:14px; font-weight:800;">Guardar Cambios</button>
+        </form>
+      </div>
+    </div>
+    ` : ''}
   `;
 
   const toastHtml = `<div id="toast-container"></div>`;
@@ -4035,7 +4093,7 @@ window.saveSupplierInvoice = async (e) => {
 
   const formData = new FormData(e.target);
   const invoice_number = formData.get('invoice_number');
-  const total_amount = parseFloat(formData.get('total_amount')) || 0;
+  const total_amount = window.getCleanNumber(formData.get('total_amount'));
   const date = formData.get('date') || new Date().toISOString().split('T')[0];
 
   if (!invoice_number || total_amount <= 0) {
@@ -4801,8 +4859,8 @@ window.saveQuickSale = async (e) => {
     
     const formData = new FormData(e.target);
     const name = formData.get('name');
-    const price = parseFloat(formData.get('price'));
-    const quantity = parseFloat(formData.get('quantity'));
+    const price = window.getCleanNumber(formData.get('price'));
+    const quantity = window.getCleanNumber(formData.get('quantity'));
     const photoFile = formData.get('photo');
     const total = price * quantity;
 
@@ -4982,8 +5040,8 @@ window.saveInventoryIn = async (e) => {
     
     const formData = new FormData(e.target);
     const productId = formData.get('product_id');
-    const quantity = parseFloat(formData.get('quantity'));
-    const cost = parseFloat(formData.get('cost'));
+    const quantity = window.getCleanNumber(formData.get('quantity'));
+    const cost = window.getCleanNumber(formData.get('cost'));
     const note = formData.get('note');
 
     const { error } = await supabase.from('inventory_movements').insert({
@@ -5277,9 +5335,9 @@ window.saveNewProduct = async (e) => {
     
     const formData = new FormData(e.target);
     const name = formData.get('name');
-    const price = parseFloat(formData.get('price'));
-    const cost = parseFloat(formData.get('cost'));
-    const stock = parseFloat(formData.get('stock'));
+    const price = window.getCleanNumber(formData.get('price'));
+    const cost = window.getCleanNumber(formData.get('cost'));
+    const stock = window.getCleanNumber(formData.get('stock'));
     const busId = formData.get('business_id');
     const pendingId = formData.get('pending_id');
 
@@ -6773,14 +6831,14 @@ window.saveCashClosure = async (e) => {
     user_id: state.user.id,
     business_id: bizId,
     date: new Date().toLocaleDateString('en-CA'), // Formato YYYY-MM-DD local
-    cash_amount: parseFloat(formData.get('cash_amount')) || 0,
-    addi_amount: parseFloat(formData.get('addi_amount')) || 0,
-    sistecredito_amount: parseFloat(formData.get('sistecredito_amount')) || 0,
-    daviplata_amount: parseFloat(formData.get('daviplata_amount')) || 0,
-    nequi_amount: parseFloat(formData.get('nequi_amount')) || 0,
-    other_expenses_amount: parseFloat(formData.get('other_expenses_amount')) || 0,
+    cash_amount: window.getCleanNumber(formData.get('cash_amount')),
+    addi_amount: window.getCleanNumber(formData.get('addi_amount')),
+    sistecredito_amount: window.getCleanNumber(formData.get('sistecredito_amount')),
+    daviplata_amount: window.getCleanNumber(formData.get('daviplata_amount')),
+    nequi_amount: window.getCleanNumber(formData.get('nequi_amount')),
+    other_expenses_amount: window.getCleanNumber(formData.get('other_expenses_amount')),
     other_expenses_description: formData.get('other_expenses_description') || '',
-    savings_amount: parseFloat(formData.get('savings_amount')) || 0,
+    savings_amount: window.getCleanNumber(formData.get('savings_amount')),
     savings_description: formData.get('savings_description') || '',
     observations: formData.get('observations') || ''
   };
@@ -6801,5 +6859,56 @@ window.saveCashClosure = async (e) => {
       btn.disabled = false;
       btn.innerHTML = originalHtml;
     }
+  }
+};
+
+window.openEditSaleModal = (saleId, currentTotal) => {
+  state.editingSaleId = saleId;
+  state.editingSaleTotal = currentTotal;
+  state.activeModal = 'edit_sale';
+  render();
+};
+
+window.saveEditSale = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  const oldHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span> Guardando...';
+
+  try {
+    const formData = new FormData(e.target);
+    const newTotal = window.getCleanNumber(formData.get('new_total'));
+    
+    if (newTotal <= 0) throw new Error("El monto debe ser mayor a cero.");
+
+    // 1. Update sale total
+    const { error: saleErr } = await supabase.from('sales')
+      .update({ total: newTotal })
+      .eq('id', state.editingSaleId);
+      
+    if (saleErr) throw saleErr;
+
+    // 2. Find and update the associated transaction
+    const saleShortId = state.editingSaleId.slice(0,5);
+    const tx = state.transactions.find(t => t.note && t.note.includes(saleShortId));
+    if (tx) {
+      const { error: txErr } = await supabase.from('transactions')
+        .update({ amount: newTotal })
+        .eq('id', tx.id);
+      if (txErr) console.warn("Error actualizando transacción:", txErr);
+    }
+
+    window.showToast("✅ Venta modificada correctamente.", "success");
+    state.activeModal = null;
+    state.editingSaleId = null;
+    await window.fetchData();
+    render();
+  } catch(err) {
+    console.error(err);
+    window.showToast("❌ Error al modificar la venta: " + err.message, "danger");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = oldHtml;
   }
 };
