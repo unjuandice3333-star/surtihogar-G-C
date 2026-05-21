@@ -3840,7 +3840,7 @@ const render = () => {
           <p style="margin:5px 0 0 0; font-size:13px; color:#64748b;">Venta #${(state.editingSaleId || '').slice(0,8).toUpperCase()}</p>
         </div>
         
-        <form onsubmit="window.saveEditSale(event)">
+        <form onsubmit="window.saveEditSale(event); return false;">
           <div class="form-group">
             <label style="font-weight:700; color:#334155; font-size:13px;">Nuevo Total de la Venta</label>
             <input type='text' inputmode='numeric' name="new_total" class="form-input currency-input" value="${state.editingSaleTotal || ''}" required style="font-size:20px; font-weight:900; height:50px; text-align:center; color:var(--success);">
@@ -6918,12 +6918,34 @@ window.saveEditSale = async (e) => {
 
     // 2. Find and update the associated transaction
     const saleShortId = state.editingSaleId.slice(0,5);
-    const tx = state.transactions.find(t => t.note && t.note.includes(saleShortId));
+    const sale = state.sales.find(s => s.id === state.editingSaleId);
+    let tx = state.transactions.find(t => t.note && t.note.includes(saleShortId));
+    
+    // Fallback para ventas rápidas/informales que no guardaron la nota
+    if (!tx && sale) {
+      tx = state.transactions.find(t => 
+        t.type === 'income' && 
+        t.user_id === sale.user_id && 
+        Number(t.amount) === Number(state.editingSaleTotal) &&
+        Math.abs(new Date(t.created_at || t.date) - new Date(sale.created_at)) < 60000
+      );
+    }
+
     if (tx) {
       const { error: txErr } = await supabase.from('transactions')
         .update({ amount: newTotal })
         .eq('id', tx.id);
       if (txErr) console.warn("Error actualizando transacción:", txErr);
+    }
+
+    // 3. Alinear el precio del ítem si es venta única (para ecosistema completo)
+    const sItems = state.saleItems.filter(si => si.sale_id === state.editingSaleId);
+    if (sItems.length === 1) {
+      await supabase.from('sale_items').update({ price: newTotal }).eq('id', sItems[0].id);
+    }
+    const pItems = state.pendingProducts.filter(p => p.sale_id === state.editingSaleId);
+    if (pItems.length === 1) {
+      await supabase.from('pending_products').update({ price: newTotal }).eq('id', pItems[0].id);
     }
 
     window.showToast("✅ Venta modificada correctamente.", "success");
