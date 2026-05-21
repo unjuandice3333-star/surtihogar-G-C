@@ -6463,6 +6463,33 @@ window.registerGeolocation = async (type) => {
     return;
   }
 
+  // REGLA: Validar turno asignado y horario de inicio (Solo para empleados)
+  if (type === 'arrival' && state.user.role !== 'admin') {
+    const now = new Date();
+    const userShiftsToday = (state.shifts || []).filter(s => {
+      if (s.user_id !== state.user.id) return false;
+      const sStart = new Date(s.start_time);
+      return sStart.toDateString() === now.toDateString();
+    });
+
+    if (userShiftsToday.length === 0) {
+      window.showToast("🚫 No tienes ningún turno programado para hoy. No puedes registrar llegada.", "warning");
+      return;
+    }
+
+    const canCheckIn = userShiftsToday.some(s => {
+      const sStart = new Date(s.start_time);
+      return now >= sStart;
+    });
+
+    if (!canCheckIn) {
+      const earliestShift = userShiftsToday.sort((a,b) => new Date(a.start_time) - new Date(b.start_time))[0];
+      const earliestTime = new Date(earliestShift.start_time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+      window.showToast(`🚫 No puedes registrar llegada antes de tu turno (Inicia a las ${earliestTime}).`, "warning");
+      return;
+    }
+  }
+
   state.loading = true;
   render();
 
