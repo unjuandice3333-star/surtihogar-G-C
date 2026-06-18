@@ -37,13 +37,15 @@ const state = {
   products: [],
   cart: [],
   posSearch: '',
+  posGenderFilter: 'all',
   sales: [],
   saleItems: [],
   pendingProducts: [],
   payrollData: null,
   qaResults: [],
   editingRateUser: null,
-  posPaymentMethod: 'Efectivo'
+  posPaymentMethod: 'Efectivo',
+  cashClosures: []
 };
 
 const safeQuery = async (queryBuilder, fallback = { data: [] }) => {
@@ -58,6 +60,46 @@ const safeQuery = async (queryBuilder, fallback = { data: [] }) => {
     console.warn("Fallo de red o consulta en base de datos:", err.message);
     return fallback;
   }
+};
+
+const resolveActiveBusiness = (shifts, user) => {
+  if (!user) return null;
+  if (user.role === 'admin') return 'all';
+
+  const userShifts = (shifts || []).filter(s => s.user_id === user.id);
+  if (userShifts.length === 0) return user.business_id;
+
+  const nowLocal = new Date();
+
+  // A. Turno activo estricto por hora (comparar start_time/end_time con hora actual)
+  const strictShift = userShifts.find(s => {
+    const start = new Date(s.start_time);
+    const end = s.end_time ? new Date(s.end_time) : null;
+    return nowLocal >= new Date(start.getTime() - 60000) && (!end || nowLocal <= end);
+  });
+  if (strictShift) return strictShift.business_id;
+
+  // B. Turno programado HOY (si existe turno en fecha calendario actual, usar ese business_id)
+  const todayStr = nowLocal.toDateString();
+  const todayShift = userShifts.find(s => {
+    const start = new Date(s.start_time);
+    return start.toDateString() === todayStr;
+  });
+  if (todayShift) return todayShift.business_id;
+
+  // C. Último turno reciente (programado hace menos de 12 horas)
+  const sortedShifts = [...userShifts].sort((a, b) => new Date(b.start_time) - new Date(a.start_time));
+  if (sortedShifts.length > 0) {
+    const lastShift = sortedShifts[0];
+    const lastShiftStart = new Date(lastShift.start_time);
+    const diffMs = Math.abs(nowLocal.getTime() - lastShiftStart.getTime());
+    if (diffMs < 12 * 60 * 60 * 1000) { // Menos de 12 horas
+      return lastShift.business_id;
+    }
+  }
+
+  // D. Fallback final
+  return user.business_id;
 };
 
 window.fetchData = async () => {
@@ -89,6 +131,236 @@ window.fetchData = async () => {
     }
     state.user = profRes || { id: session.user.id, name: 'Admin', role: 'admin' };
 
+    // === INICIO GENERADOR DE TURNOS CONTINUO DE 4 SEMANAS ===
+    if (state.user?.role === 'admin') {
+      try {
+        // Limpieza inyectada temporal para inicializar turnos de André y Andrea Torres sin afectar a los demás
+        const hasCleanedV6 = localStorage.getItem('shifts_cleaned_v6');
+        if (!hasCleanedV6) {
+          window.showToast("⏳ Inicializando turnos para André y Andrea Torres...", "info");
+          const today = new Date();
+          today.setHours(0,0,0,0);
+          
+          try {
+            // 1. Eliminar SOLAMENTE los turnos futuros de André y Andrea Torres
+            await supabase.from('shifts')
+              .delete()
+              .in('user_id', ['ef4d854e-c6d4-4307-a7ff-18cd167eddde', '3c076f65-ff17-4116-9303-7758ab0f20a7'])
+              .gte('start_time', today.toISOString());
+              
+            // 2. Generar sus turnos por defecto desde hoy hasta fin del próximo mes
+            const now = new Date();
+            const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+            nextMonthEnd.setHours(23,59,59,999);
+            
+            let tempDate = new Date(today);
+            const shiftsToInsert = [];
+            
+            while (tempDate <= nextMonthEnd) {
+              const day = tempDate.getDay();
+              
+              // André (ef4d854e-c6d4-4307-a7ff-18cd167eddde)
+              if (day !== 5 && day !== 6) { // Domingo a Jueves
+                const start = new Date(tempDate);
+                start.setHours(8, 30, 0, 0);
+                const end = new Date(tempDate);
+                end.setHours(20, 30, 0, 0);
+                shiftsToInsert.push({
+                  user_id: 'ef4d854e-c6d4-4307-a7ff-18cd167eddde',
+                  business_id: 'e349c48f-70d8-4832-a322-b6508476dec4',
+                  start_time: start.toISOString(),
+                  end_time: end.toISOString()
+                });
+              }
+              
+              // Andrea Torres (3c076f65-ff17-4116-9303-7758ab0f20a7)
+              if (day !== 4 && day !== 6) { // Domingo a Miércoles y Viernes
+                const start = new Date(tempDate);
+                start.setHours(10, 0, 0, 0);
+                const end = new Date(tempDate);
+                end.setHours(20, 0, 0, 0);
+                shiftsToInsert.push({
+                  user_id: '3c076f65-ff17-4116-9303-7758ab0f20a7',
+                  business_id: '9b99027c-7471-4c16-80c2-29e2645312e8',
+                  start_time: start.toISOString(),
+                  end_time: end.toISOString()
+                });
+              }
+              
+              tempDate.setDate(tempDate.getDate() + 1);
+            }
+            
+            if (shiftsToInsert.length > 0) {
+              const BATCH_SIZE = 50;
+              for (let i = 0; i < shiftsToInsert.length; i += BATCH_SIZE) {
+                const batch = shiftsToInsert.slice(i, i + BATCH_SIZE);
+                await supabase.from('shifts').insert(batch);
+              }
+            }
+            
+            localStorage.setItem('shifts_cleaned_v6', 'true');
+            localStorage.removeItem('last_shift_generation_check'); // Forzar ejecución del generador
+            window.showToast("✅ Turnos inicializados exitosamente.", "success");
+          } catch(e) {
+            console.error("Error inicializando turnos para André/Andrea:", e);
+          }
+        }
+
+        const lastCheck = localStorage.getItem('last_shift_generation_check');
+        const nowMs = Date.now();
+        const shouldCheck = !lastCheck || (nowMs - parseInt(lastCheck) > 43200000); // 12 horas de throttle
+        
+        if (shouldCheck) {
+          localStorage.setItem('last_shift_generation_check', nowMs.toString());
+          
+          const EMPLOYEES = {
+            N: '1541567b-e1b9-4baa-b6b1-c61b990d848f',
+            PM: '42043c7a-0505-4b22-bd05-f4a90d51e924',
+            B: '68466365-6338-44aa-b564-16c77b645c91',
+            PQ: 'e7bdc58c-894a-4fbe-8664-7052a5bf9885',
+            C: '6d02bcd1-d485-4799-9de8-0f7531dee85b'
+          };
+
+          const SCHEDULE = [
+            // SEMANA 1
+            [{ m: ['N', 'PM'], t: ['B', 'PQ'] }, { m: ['N', 'PM'], t: ['B', 'PQ'] }, { m: ['N', 'PM'], t: ['B', 'C'] }, { m: ['N', 'C'], t: ['B', 'PQ'] }, { m: ['N', 'C'], t: ['N', 'B'] }, { m: ['N', 'PQ'], t: ['B', 'PQ'] }, { m: ['PM', 'PQ'], t: ['PM', 'PQ'] }],
+            // SEMANA 2
+            [{ m: ['B', 'PQ'], t: ['N', 'PQ'] }, { m: ['B', 'PM'], t: ['N', 'PM'] }, { m: ['B', 'PM'], t: ['N', 'PQ'] }, { m: ['B', 'C'], t: ['N', 'PQ'] }, { m: ['PM', 'PQ'], t: ['N', 'PQ'] }, { m: ['B', 'PQ'], t: ['N', 'PQ'] }, { m: ['PM', 'B'], t: ['B', 'PM'] }],
+            // SEMANA 3
+            [{ m: ['B', 'PQ'], t: ['B', 'PM'] }, { m: ['N', 'PQ'], t: ['B', 'PM'] }, { m: ['N', 'C'], t: ['B', 'PM'] }, { m: ['N', 'PQ'], t: ['B', 'C'] }, { m: ['N', 'PQ'], t: ['B', 'C'] }, { m: ['N', 'PQ'], t: ['B', 'PQ'] }, { m: ['N', 'PQ'], t: ['N', 'PQ'] }],
+            // SEMANA 4
+            [{ m: ['B', 'PQ'], t: ['N', 'PM'] }, { m: ['B', 'PQ'], t: ['B', 'PM'] }, { m: ['B', 'C'], t: ['N', 'PM'] }, { m: ['N', 'PQ'], t: ['N', 'C'] }, { m: ['B', 'PQ'], t: ['N', 'C'] }, { m: ['N', 'B'], t: ['N', 'C'] }, { m: ['B', 'PQ'], t: ['B', 'PM'] }]
+          ];
+
+          const anchorMonday = new Date(2026, 4, 25); // Lunes 25 Mayo 2026 (Semana 3)
+          anchorMonday.setHours(0,0,0,0);
+          
+          const getMondayOfDate = (d) => {
+            const monday = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            const day = monday.getDay();
+            monday.setDate(monday.getDate() - day + (day === 0 ? -6 : 1));
+            monday.setHours(0,0,0,0);
+            return monday;
+          };
+          
+          const BUSINESS_ID = 'ec292ea5-5cfd-44d8-8b1c-e093cb719492';
+          
+          // Determinar límite: Fin del próximo mes
+          const now = new Date();
+          const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+          nextMonthEnd.setHours(0,0,0,0);
+          
+          // Obtener el último turno de la BD
+          const { data: latestShifts } = await supabase.from('shifts').select('start_time').order('start_time', { ascending: false }).limit(1);
+          
+          let currentDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          currentDate.setHours(0,0,0,0);
+
+          if (latestShifts && latestShifts.length > 0) {
+            const lastDate = new Date(latestShifts[0].start_time);
+            lastDate.setHours(0,0,0,0);
+            currentDate = new Date(lastDate);
+            currentDate.setDate(currentDate.getDate() + 1);
+          } else {
+            // Si no hay turnos a futuro, iniciar desde hoy
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            currentDate = today;
+          }
+
+          if (currentDate <= nextMonthEnd) {
+            window.showToast("🔄 Generando patrón continuo de turnos...", "info");
+            const shiftsToInsert = [];
+            
+            while (currentDate <= nextMonthEnd) {
+              const targetMonday = getMondayOfDate(currentDate);
+              const diffMs = targetMonday.getTime() - anchorMonday.getTime();
+              const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+              const weekIndex = ((2 + diffWeeks) % 4 + 4) % 4; // Lunes 25 Mayo es Semana 3 (index 2)
+              
+              const day = currentDate.getDay();
+              const dayOfWeek = day === 0 ? 6 : day - 1;
+              const dayConfig = SCHEDULE[weekIndex][dayOfWeek];
+                
+                const mEmps = dayConfig.m || [];
+                const tEmps = dayConfig.t || [];
+                const allEmps = new Set([...mEmps, ...tEmps]);
+                
+                allEmps.forEach(empKey => {
+                  const userId = EMPLOYEES[empKey];
+                  if (!userId) return;
+                  
+                  const inMorning = mEmps.includes(empKey);
+                  const inAfternoon = tEmps.includes(empKey);
+                  
+                  let startHr = 8;
+                  let endHr = 14;
+                  
+                  if (inMorning && inAfternoon) {
+                    startHr = 8;
+                    endHr = 21; // Turno consolidado
+                  } else if (inAfternoon) {
+                    startHr = 14;
+                    endHr = 21;
+                  }
+                  
+                  const start = new Date(currentDate); start.setHours(startHr, 0, 0, 0);
+                  const end = new Date(currentDate); end.setHours(endHr, 0, 0, 0);
+                  shiftsToInsert.push({ user_id: userId, business_id: BUSINESS_ID, start_time: start.toISOString(), end_time: end.toISOString() });
+                });
+
+              // André (ef4d854e-c6d4-4307-a7ff-18cd167eddde)
+              if (day !== 5 && day !== 6) { // Trabaja Domingo (0) a Jueves (4). Viernes/Sábado descanso.
+                const start = new Date(currentDate);
+                start.setHours(8, 30, 0, 0);
+                const end = new Date(currentDate);
+                end.setHours(20, 30, 0, 0);
+                shiftsToInsert.push({
+                  user_id: 'ef4d854e-c6d4-4307-a7ff-18cd167eddde',
+                  business_id: 'e349c48f-70d8-4832-a322-b6508476dec4',
+                  start_time: start.toISOString(),
+                  end_time: end.toISOString()
+                });
+              }
+
+              // Andrea Torres (3c076f65-ff17-4116-9303-7758ab0f20a7)
+              if (day !== 4 && day !== 6) { // Trabaja Domingo (0) a Miércoles (3), y Viernes (5). Jueves/Sábado descanso.
+                const start = new Date(currentDate);
+                start.setHours(10, 0, 0, 0);
+                const end = new Date(currentDate);
+                end.setHours(20, 0, 0, 0);
+                shiftsToInsert.push({
+                  user_id: '3c076f65-ff17-4116-9303-7758ab0f20a7',
+                  business_id: '9b99027c-7471-4c16-80c2-29e2645312e8',
+                  start_time: start.toISOString(),
+                  end_time: end.toISOString()
+                });
+              }
+
+              currentDate.setDate(currentDate.getDate() + 1);
+            }
+
+            if (shiftsToInsert.length > 0) {
+              const BATCH_SIZE = 50;
+              for (let i = 0; i < shiftsToInsert.length; i += BATCH_SIZE) {
+                const batch = shiftsToInsert.slice(i, i + BATCH_SIZE);
+                await supabase.from('shifts').insert(batch);
+              }
+              window.showToast("✅ Turnos generados exitosamente.", "success");
+              
+              // Recargar datos si es necesario para refrescar la UI de inmediato
+              if (window.location.hash.includes('manager')) {
+                 setTimeout(() => fetchData(), 1000);
+              }
+            }
+          }
+        }
+      } catch(e) {
+        console.error("Error generando turnos automáticos:", e);
+      }
+    }
+    // === FIN GENERADOR DE TURNOS CONTINUO ===
+
     // 3. Determinar Negocio Actual antes de seguir
     // (Aún no tenemos turnos, así que usamos el del perfil como fallback temporal)
     const initialBusId = state.currentBusinessId === 'all' ? 'all' : (state.currentBusinessId || state.user?.business_id || 'all');
@@ -113,10 +385,26 @@ window.fetchData = async () => {
     // 5. Cargas Administrativas o de Colaborador (Turnos)
     if (state.user.role === 'admin') {
       try {
-        const shPromise = safeQuery(supabase.from('shifts').select('*, businesses(name)').order('start_time', { ascending: false }));
+        const fetchAll = async (tableName, selectStr, orderByField) => {
+          let all = [];
+          let page = 0;
+          while(true) {
+            let q = supabase.from(tableName).select(selectStr);
+            if (orderByField) q = q.order(orderByField, { ascending: false });
+            q = q.range(page * 1000, (page + 1) * 1000 - 1);
+            const res = await safeQuery(q);
+            if (!res?.data || res.data.length === 0) break;
+            all.push(...res.data);
+            if (res.data.length < 1000) break;
+            page++;
+          }
+          return { data: all };
+        };
+
+        const shPromise = fetchAll('shifts', '*, businesses(name)', 'start_time');
         const empPromise = safeQuery(supabase.from('users').select('*').neq('role', 'admin'));
-        const salesPromise = safeQuery(supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(200));
-        const itemsPromise = safeQuery(supabase.from('sale_items').select('*, products(name, business_id, cost)'));
+        const salesPromise = fetchAll('sales', '*', 'created_at');
+        const itemsPromise = fetchAll('sale_items', '*, products(name, business_id, cost)', null);
         const pendingPromise = safeQuery(supabase.from('pending_products').select('*').order('created_at', { ascending: false }));
         const suppliersPromise = safeQuery(SupplierService.loadAll(state.user.id), []);
         const polyPromise = safeQuery(supabase.from('system_logs').select('message').eq('type', 'GEOFENCE_POLYGON').order('timestamp', { ascending: false }));
@@ -154,9 +442,11 @@ window.fetchData = async () => {
       try {
         const shPromise = safeQuery(supabase.from('shifts').select('*, businesses(lat, lng, geofence_radius_meters, name)').eq('user_id', session.user.id));
         const attPromise = safeQuery(supabase.from('system_logs').select('message').eq('user_id', session.user.id).eq('type', 'GEOLOCATION_TRACK').order('timestamp', { ascending: false }).limit(1));
+        const closuresPromise = safeQuery(supabase.from('cash_closures').select('*, users(name), businesses(name)').order('created_at', { ascending: false }).limit(10));
 
-        const [shRes, attRes] = await Promise.all([shPromise, attPromise]);
+        const [shRes, attRes, closuresRes] = await Promise.all([shPromise, attPromise, closuresPromise]);
         state.shifts = shRes?.data || [];
+        state.cashClosures = closuresRes?.data || [];
         
         // Validar si hay un turno físico activo por GPS
         let hasGeoActive = false;
@@ -169,12 +459,8 @@ window.fetchData = async () => {
         state.hasActiveAttendance = hasGeoActive;
         
         // Calcular turno activo inmediato para alimentar el servicio BYOD local
-        const nowCheck = new Date();
-        const activeShiftLocal = (state.shifts || []).find(s => {
-          const start = new Date(s.start_time);
-          const end = new Date(s.end_time);
-          return nowCheck >= new Date(start.getTime() - 60000) && nowCheck <= end;
-        });
+        const activeShiftLocalId = resolveActiveBusiness(state.shifts, state.user);
+        const activeShiftLocal = (state.shifts || []).find(s => s.business_id === activeShiftLocalId);
 
         // Activar/Desactivar motor de telemetría silenciosa BYOD con Geocerca
         if (hasGeoActive && state.user?.role !== 'admin') {
@@ -191,41 +477,18 @@ window.fetchData = async () => {
       }
     }
 
-    // 6. Actualizar Turno Activo y Negocio Definitivo
-    const nowLocal = new Date();
-    const activeShift = (state.shifts || []).find(s => {
-      const start = new Date(s.start_time);
-      const end = new Date(s.end_time);
-      return nowLocal >= new Date(start.getTime() - 60000) && nowLocal <= end;
-    });
-
-    // Prioridad: Se aprueba por Horario Programado O por Marcación Real de Asistencia (GPS)
-    state.activeShiftBusinessId = activeShift?.business_id || (state.hasActiveAttendance ? state.user?.business_id : null);
-    state.currentBusinessId = state.activeShiftBusinessId || state.user?.business_id || 'all';
+    // 6. Actualizar Turno Activo y Negocio Definitivo (Arquitectura Robustecida)
+    state.activeShiftBusinessId = resolveActiveBusiness(state.shifts, state.user);
+    state.currentBusinessId = state.activeShiftBusinessId || 'all';
 
     // 7. Carga de productos (Agrupación Inteligente para Clúster Centralizado)
     let prodData = [];
     try {
       let prodQuery = supabase.from('products').select('*, businesses(name)').order('name');
-      const finalFilterId = state.activeShiftBusinessId || (state.currentBusinessId !== 'all' ? state.currentBusinessId : null);
+      const finalFilterId = state.activeShiftBusinessId && state.activeShiftBusinessId !== 'all' ? state.activeShiftBusinessId : null;
       
       if (finalFilterId) {
-         const activeBiz = state.businesses.find(b => b.id === finalFilterId);
-         const clusterKeywords = ['electro', 'mueble', 'ropa', 'pañalera'];
-         const isCentralHub = activeBiz && clusterKeywords.some(kw => activeBiz.name?.toLowerCase().includes(kw));
-
-         if (isCentralHub) {
-            // Habilitar inventario consolidado unificado entre todas las sedes del clúster operativo centralizado
-            const clusterIds = state.businesses
-              .filter(b => clusterKeywords.some(kw => b.name?.toLowerCase().includes(kw)))
-              .map(b => b.id);
-            
-            prodQuery = prodQuery.in('business_id', clusterIds);
-         } else {
-            prodQuery = prodQuery.eq('business_id', finalFilterId);
-         }
-      } else if (state.user?.role !== 'admin' && state.user?.business_id) {
-         prodQuery = prodQuery.eq('business_id', state.user.business_id);
+         prodQuery = prodQuery.eq('business_id', finalFilterId);
       }
       
       const { data } = await prodQuery;
@@ -235,10 +498,39 @@ window.fetchData = async () => {
     }
     state.products = prodData;
 
+    // --- INICIO AUTOSANACIÓN DE LA BD ---
+    if (state.user?.role === 'admin' && state.sales && state.transactions) {
+      setTimeout(async () => {
+        try {
+          const mSales = state.sales;
+          const mTx = state.transactions;
+          for (const s of mSales) {
+            const saleShortId = s.id.slice(0, 5);
+            let t = mTx.find(t => t.note && t.note.includes(saleShortId));
+            if (!t && s.note && s.note.startsWith('Venta informal: ')) {
+              const descPart = s.note.replace('Venta informal: ', '').trim();
+              t = mTx.find(tx => tx.type === 'income' && tx.user_id === s.user_id && (tx.description === descPart || tx.description === 'Venta Rápida: ' + descPart) && Math.abs(new Date(tx.date) - new Date(s.created_at)) < 120000);
+            }
+            if (!t) {
+              t = mTx.find(tx => tx.type === 'income' && tx.user_id === s.user_id && Math.abs(new Date(tx.date) - new Date(s.created_at)) < 60000);
+            }
+            if (t && Number(t.amount) !== Number(s.total)) {
+              await supabase.from('transactions').update({ amount: s.total }).eq('id', t.id);
+            }
+          }
+        } catch(e){}
+        try {
+          await window.runAutomaticTelegramReports();
+        } catch(e){}
+      }, 3000);
+    }
+    // --- FIN AUTOSANACIÓN ---
+
   } catch (e) { 
     console.error("Error Crítico en fetchData:", e);
     window.showToast('⚠️ Error de conexión: ' + e.message, 'danger');
   } finally { 
+    if (state.view === 'loading') state.view = 'app';
     state.loading = false; 
     if (window.render) window.render(); else render(); 
   }
@@ -399,7 +691,10 @@ window.openModal = async (type, shiftId = null, userId = null, date = null) => {
         p_user_id: state.user.id, 
         p_current_time: new Date().toISOString() 
       });
-      state.activeShiftBusinessId = shiftBusId;
+      // Lógica defensiva: NO sobrescribir con null si falla o retorna null
+      if (shiftBusId) {
+        state.activeShiftBusinessId = shiftBusId;
+      }
     } catch(e) { console.warn("Error en RPC get_active_shift:", e); }
   }
 
@@ -432,7 +727,7 @@ window.saveBaratilloSale = async (e) => {
     
     const form = new FormData(e.target);
     const desc = form.get('description');
-    const amount = window.getCleanNumber(form.get(''));
+    const amount = window.getCleanNumber(form.get('amount'));
     const pm = form.get('payment_method');
     const bizId = state.activeShiftBusinessId || state.currentBusinessId;
     
@@ -456,6 +751,7 @@ window.saveBaratilloSale = async (e) => {
       amount: amount,
       type: 'income',
       description: desc,
+      note: sale.id.slice(0, 5), // Link to the sale
       category_id: cat ? cat.id : null,
       business_id: bizId,
       user_id: state.user.id,
@@ -654,21 +950,36 @@ window.deleteShift = async (id) => {
 };
 
 window.deleteEmployee = async (id, name) => {
-  if (!confirm(`¿Estás SEGURO de eliminar al colaborador ${name}?\n\nEsto borrará su perfil permanentemente.`)) return;
-  if (!confirm(`⚠️ ADVERTENCIA FINAL: Esta acción NO se puede deshacer. ¿Proceder?`)) return;
+  if (!confirm(`¿Estás SEGURO de eliminar al colaborador ${name}?\n\nEsto borrará su perfil.`)) return;
+  
+  const deepDelete = confirm(`¿Deseas realizar una ELIMINACIÓN PROFUNDA?\n\nSi aceptas, se borrarán todos sus turnos, ventas y registros (ideal para usuarios de PRUEBA).\n\nSi es un empleado REAL que renunció, dale CANCELAR para no dañar tu contabilidad histórica.`);
 
   try {
     state.loading = true;
     render();
     
+    if (deepDelete) {
+      window.showToast("Borrando dependencias (turnos, ventas)...", "warning");
+      await supabase.from('shifts').delete().eq('user_id', id);
+      await supabase.from('sales').delete().eq('user_id', id);
+      await supabase.from('transactions').delete().eq('user_id', id);
+      await supabase.from('cash_closures').delete().eq('user_id', id);
+      await supabase.from('system_logs').delete().eq('user_id', id);
+    }
+
     const { error } = await supabase.from('users').delete().eq('id', id);
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23503') {
+         throw new Error("El usuario tiene datos amarrados (ventas, turnos) y elegiste no hacer eliminación profunda. No se puede borrar para proteger tu contabilidad.");
+      }
+      throw error;
+    }
     
     window.showToast(`✅ Colaborador ${name} eliminado con éxito.`, "success");
-    await fetchData();
+    await window.fetchData();
   } catch (err) {
     console.error(err);
-    window.showToast("Error al eliminar colaborador: " + err.message, "danger");
+    window.showToast("Error: " + err.message, "danger");
   } finally {
     state.loading = false;
     render();
@@ -685,7 +996,7 @@ window.handleLogin = async (e) => {
     btn.innerHTML = '<span class="loading-spinner"></span> ENTRANDO...';
     
     const email = e.target.querySelector('input[type="email"]').value;
-    const password = e.target.querySelector('input[type="password"]').value;
+    const password = document.getElementById('login-pass').value;
     
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) { 
@@ -696,7 +1007,7 @@ window.handleLogin = async (e) => {
     }
     else { 
       state.authError = null; // Limpiar cualquier error previo
-      state.view = 'app'; 
+      state.view = 'loading'; 
       state.loading = true;
       if (window.render) window.render(); else render();
       
@@ -756,7 +1067,7 @@ window.handleRegister = async (e) => {
 
     const name = e.target.querySelector('input[placeholder="Nombre"]').value;
     const email = e.target.querySelector('input[placeholder="Email"]').value;
-    const password = e.target.querySelector('input[type="password"]').value;
+    const password = document.getElementById('reg-pass').value;
     const busId = e.target.querySelector('select').value;
     
     if (!busId) {
@@ -785,7 +1096,7 @@ window.handleRegister = async (e) => {
         window.logSystemError('Auth Error', loginError.message, 'AutoLogin');
         render();
       } else {
-        state.view = 'app';
+        state.view = 'loading';
         await fetchData();
       }
     }
@@ -881,12 +1192,43 @@ const render = () => {
   const app = document.getElementById('app');
   if (state.loading && state.view === 'loading') { app.innerHTML = '<div style="padding:100px;text-align:center;">Cargando...</div>'; return; }
 
-  const getSystemSalesForClosure = (bizId, dateStr) => {
+  const getSystemSalesForClosure = (bizId, dateStr, closureObj = null) => {
+    let startTime = null;
+    let endTime = null;
+    
+    if (closureObj) {
+      const isBaratillo = state.businesses?.find(b => b.id === bizId)?.name?.toLowerCase().includes('baratillo');
+      if (isBaratillo) {
+        // Encontrar todos los cierres de este negocio en este día, ordenados cronológicamente
+        const dayClosures = state.cashClosures
+          .filter(c => c.business_id === bizId && c.date === dateStr)
+          .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+          
+        const closureIndex = dayClosures.findIndex(c => c.id === closureObj.id);
+        
+        if (closureIndex === 0) {
+          // Es el primer cierre del día (Mañana)
+          endTime = new Date(closureObj.created_at).getTime();
+        } else if (closureIndex > 0) {
+          // Es un cierre posterior (Tarde/Noche)
+          startTime = new Date(dayClosures[closureIndex - 1].created_at).getTime();
+          endTime = new Date(closureObj.created_at).getTime();
+        }
+      }
+    }
+
     const dayTrx = state.transactions.filter(t => {
       if (t.type !== 'income') return false;
       if (t.business_id !== bizId) return false;
       const tDate = new Date(t.date).toLocaleDateString('en-CA');
-      return tDate === dateStr;
+      if (tDate !== dateStr) return false;
+      
+      if (startTime !== null || endTime !== null) {
+        const trxTime = new Date(t.created_at).getTime();
+        if (startTime !== null && trxTime <= startTime) return false;
+        if (endTime !== null && trxTime > endTime) return false;
+      }
+      return true;
     });
 
     return {
@@ -894,7 +1236,8 @@ const render = () => {
       addi: dayTrx.filter(t => t.payment_method === 'Addi').reduce((sum, t) => sum + Number(t.amount), 0),
       sistecredito: dayTrx.filter(t => t.payment_method === 'Sistecredito' || t.payment_method === 'Sistecrédito').reduce((sum, t) => sum + Number(t.amount), 0),
       daviplata: dayTrx.filter(t => t.payment_method === 'Daviplata').reduce((sum, t) => sum + Number(t.amount), 0),
-      nequi: dayTrx.filter(t => t.payment_method === 'Transferencia' || t.payment_method === 'Nequi').reduce((sum, t) => sum + Number(t.amount), 0)
+      nequi: dayTrx.filter(t => t.payment_method === 'Transferencia' || t.payment_method === 'Nequi').reduce((sum, t) => sum + Number(t.amount), 0),
+      bonos: dayTrx.filter(t => t.payment_method === 'Bonos Coopchipaque').reduce((sum, t) => sum + Number(t.amount), 0)
     };
   };
 
@@ -968,6 +1311,7 @@ const render = () => {
 
     const activeBiz = state.businesses.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
     const isBaratillo = activeBiz && activeBiz.name.toLowerCase().includes('baratillo');
+    const isJM = activeBiz && (activeBiz.name.toLowerCase().includes('j&m') || activeBiz.name.toLowerCase().includes('j & m'));
 
     html = `
       <header class="main-header">
@@ -1018,14 +1362,23 @@ const render = () => {
           </div>
         ` : `
         <div class="pos-main">
-          <div style="display:flex; gap:10px;">
-            <div style="position:relative; flex:1;">
+          <div style="display:flex; flex-direction:column; gap:10px; width:100%; margin-bottom:10px;">
+            <div style="position:relative; width:100%;">
               <i data-lucide="search" style="position:absolute; left:15px; top:15px; color:#94a3b8; width:20px;"></i>
               <input type="text" id="pos-search-input" class="form-input" placeholder="Buscar producto..." 
                 value="${state.posSearch}" 
                 oninput="window.handlePosSearch(this.value)" 
-                style="width:100%; margin:0; height:50px; font-size:16px; padding-left:45px;">
+                style="width:100%; margin:0; height:50px; font-size:16px; padding-left:45px; border-radius:12px;">
             </div>
+            ${isJM ? `
+            <div style="display:flex; gap:8px; align-items:center; overflow-x:auto; padding-bottom:5px; width:100%; -webkit-overflow-scrolling:touch;">
+              <button onclick="state.posGenderFilter='all';render()" style="padding:10px 18px; border-radius:12px; border:1px solid ${state.posGenderFilter==='all'?'#6366f1':'#e2e8f0'}; background:${state.posGenderFilter==='all'?'#6366f1':'white'}; color:${state.posGenderFilter==='all'?'white':'#64748b'}; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; flex-shrink:0;">🏷️ Todos</button>
+              <button onclick="state.posGenderFilter='hombre';render()" style="padding:10px 18px; border-radius:12px; border:1px solid ${state.posGenderFilter==='hombre'?'#3b82f6':'#e2e8f0'}; background:${state.posGenderFilter==='hombre'?'#3b82f6':'white'}; color:${state.posGenderFilter==='hombre'?'white':'#64748b'}; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; flex-shrink:0;">👨 Hombre</button>
+              <button onclick="state.posGenderFilter='mujer';render()" style="padding:10px 18px; border-radius:12px; border:1px solid ${state.posGenderFilter==='mujer'?'#ec4899':'#e2e8f0'}; background:${state.posGenderFilter==='mujer'?'#ec4899':'white'}; color:${state.posGenderFilter==='mujer'?'white':'#64748b'}; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; flex-shrink:0;">👩 Mujer</button>
+              <button onclick="state.posGenderFilter='unisex';render()" style="padding:10px 18px; border-radius:12px; border:1px solid ${state.posGenderFilter==='unisex'?'#8b5cf6':'#e2e8f0'}; background:${state.posGenderFilter==='unisex'?'#8b5cf6':'white'}; color:${state.posGenderFilter==='unisex'?'white':'#64748b'}; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; flex-shrink:0;">⚧️ Unisex</button>
+            </div>
+            ` : ''}
+          </div>
             <div style="display:flex; gap:10px;">
               ${(state.user?.role === 'admin' || state.user?.can_manage_inventory) ? `
                 <button onclick="state.activeModal='new_product';render()" class="btn-primary" style="width:auto; padding:0 20px; background:var(--primary);">+ NUEVO</button>
@@ -1070,6 +1423,13 @@ const render = () => {
                 <option value="Efectivo" ${state.posPaymentMethod === 'Efectivo' ? 'selected' : ''}>💵 Efectivo</option>
                 <option value="Addi" ${state.posPaymentMethod === 'Addi' ? 'selected' : ''}>💳 Addi</option>
                 <option value="Sistecredito" ${state.posPaymentMethod === 'Sistecredito' ? 'selected' : ''}>💳 Sistecredito</option>
+                <option value="Bonos Coopchipaque" ${state.posPaymentMethod === 'Bonos Coopchipaque' ? 'selected' : ''}>🎟️ Bonos Coopchipaque</option>
+                ${(() => {
+                  const activeBus = state.businesses?.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
+                  return activeBus?.name?.toLowerCase().includes('baratillo')
+                    ? `<option value="Daviplata" ${state.posPaymentMethod === 'Daviplata' ? 'selected' : ''}>📱 Daviplata</option>`
+                    : `<option value="Transferencia" ${state.posPaymentMethod === 'Transferencia' ? 'selected' : ''}>🏦 Transferencia</option>`;
+                })()}
                 <option value="Llano Gas" ${state.posPaymentMethod === 'Llano Gas' ? 'selected' : ''}>🔥 Llano Gas</option>
               </select>
             </div>
@@ -1156,10 +1516,7 @@ const render = () => {
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
               <h3 style="font-size:16px;">Rendimiento por Negocio</h3>
               <div style="display:flex; gap:8px; align-items:center;">
-                ${state.currentBusinessId !== 'all' ? `
-                  <button onclick="window.setBusinessLocation()" class="btn-secondary" style="padding:8px 12px; font-size:11px; height:40px; background:#eff6ff; border:1px solid #dbeafe; color:#1d4ed8; font-weight:700;" title="Guardar ubicación actual del GPS como centro del negocio"><i data-lucide="map-pin" style="width:14px; margin-right:4px;"></i> FIJAR GPS</button>
-                ` : ''}
-                <button onclick="window.purgeStagingData()" class="btn-secondary" style="padding:8px 12px; font-size:11px; height:40px; background:#fef2f2; border:1px solid #fee2e2; color:#dc2626; font-weight:700; display:flex; align-items:center; gap:4px;" title="Borrar datos de prueba y preparar producción"><i data-lucide="trash-2" style="width:14px;"></i> LIMPIAR PRUEBAS</button>
+
                 <button onclick="state.activeModal='new_business';window.render()" class="btn-primary" style="padding:8px 12px; font-size:11px; height:40px; background:var(--primary); border:none; font-weight:700; display:flex; align-items:center; gap:4px;" title="Crear un nuevo negocio o sucursal"><i data-lucide="plus" style="width:14px;"></i> NUEVA SEDE</button>
                 <select onchange="window.filterByBusiness(this.value)" class="form-input" style="width:auto; height:40px; font-size:12px;">
                   <option value="all" ${state.currentBusinessId === 'all' ? 'selected' : ''}>Todos los negocios</option>
@@ -1221,6 +1578,18 @@ const render = () => {
             </div>
             <div>
               <button onclick="window.generateAdminSalesReportPDF()" class="btn-primary" style="width:100%; background:#0284c7; padding:12px; border-radius:12px; font-size:13px; font-weight:800; display:flex; align-items:center; justify-content:center; gap:8px; border:none; box-shadow: 0 4px 12px rgba(2,132,199,0.3); transition:transform 0.2s;"><i data-lucide="download-cloud" style="width:16px;"></i> DESCARGAR PDF</button>
+            </div>
+          </div>
+          <!-- 📨 REPORTES AUTOMÁTICOS Y MANUALES A TELEGRAM -->
+          <div style="margin-top:20px; padding-top:20px; border-top: 1px dashed rgba(255,255,255,0.15); display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:15px;">
+            <div>
+              <h4 style="font-size:13px; font-weight:700; color:#38bdf8; display:flex; align-items:center; gap:6px; margin:0;"><i data-lucide="send" style="width:16px;"></i> Reportes de Ventas a Telegram</h4>
+              <p style="font-size:10px; color:#94a3b8; margin:2px 0 0 0;">Envía planillas PDF del periodo actual consolidado directamente al canal de Telegram configurado.</p>
+            </div>
+            <div style="display:flex; gap:10px; flex-wrap:wrap;">
+              <button onclick="window.sendTelegramSalesReport('daily')" class="btn-primary" style="background:#0284c7; padding:8px 12px; border-radius:8px; font-size:11px; font-weight:700; display:flex; align-items:center; gap:5px; border:none; transition:all 0.2s;"><i data-lucide="send" style="width:12px;"></i> DIARIO</button>
+              <button onclick="window.sendTelegramSalesReport('weekly')" class="btn-primary" style="background:#0369a1; padding:8px 12px; border-radius:8px; font-size:11px; font-weight:700; display:flex; align-items:center; gap:5px; border:none; transition:all 0.2s;"><i data-lucide="send" style="width:12px;"></i> SEMANAL</button>
+              <button onclick="window.sendTelegramSalesReport('monthly')" class="btn-primary" style="background:#0f766e; padding:8px 12px; border-radius:8px; font-size:11px; font-weight:700; display:flex; align-items:center; gap:5px; border:none; transition:all 0.2s;"><i data-lucide="send" style="width:12px;"></i> MENSUAL</button>
             </div>
           </div>
         </div>
@@ -1455,9 +1824,10 @@ const render = () => {
                     <td colspan="6" style="padding:40px; text-align:center; color:#94a3b8; font-weight:600;">No se han registrado cierres de caja en la base de datos aún.</td>
                   </tr>
                 ` : state.cashClosures.map(c => {
-                  const sys = getSystemSalesForClosure(c.business_id, c.date);
-                  const totalReported = Number(c.cash_amount) + Number(c.addi_amount) + Number(c.sistecredito_amount) + Number(c.daviplata_amount) + Number(c.nequi_amount);
-                  const totalSystem = sys.efectivo + sys.addi + sys.sistecredito + sys.daviplata + sys.nequi;
+                  const sys = getSystemSalesForClosure(c.business_id, c.date, c);
+                  const effectiveCash = Number(c.cash_amount) - Number(c.next_day_base_amount || 0);
+                  const totalReported = effectiveCash + Number(c.addi_amount) + Number(c.sistecredito_amount) + Number(c.daviplata_amount) + Number(c.nequi_amount) + Number(c.bonos_amount || 0);
+                  const totalSystem = sys.efectivo + sys.addi + sys.sistecredito + sys.daviplata + sys.nequi + (sys.bonos || 0);
                   const diff = totalReported - totalSystem;
 
                   let diffColor = '#10b981'; // Verde
@@ -1472,11 +1842,20 @@ const render = () => {
                     diffText = `🟡 Sobrante: +${formatCurrency(diff)}`;
                     diffBg = '#fffbeb';
                   }
+                  
+                  // Identificador visual de turno para Baratillo
+                  let shiftLabel = '';
+                  const isBaratillo = c.businesses?.name?.toLowerCase().includes('baratillo');
+                  if (isBaratillo) {
+                    const closureHour = new Date(c.created_at).getHours();
+                    if (closureHour >= 12 && closureHour <= 17) shiftLabel = ' <span style="font-size:10px; background:#fef08a; color:#854d0e; padding:2px 6px; border-radius:10px; font-weight:800; margin-left:6px;">☀️ Mañana</span>';
+                    else if (closureHour >= 18) shiftLabel = ' <span style="font-size:10px; background:#1e293b; color:#94a3b8; padding:2px 6px; border-radius:10px; font-weight:800; margin-left:6px;">🌙 Noche</span>';
+                  }
 
                   return `
                     <tr style="border-bottom:1px solid #e2e8f0; transition: background 0.2s;">
                       <td style="padding:15px; font-weight:700;">
-                        <span style="display:block; font-size:13px; color:#1e293b;">${c.date}</span>
+                        <span style="display:flex; align-items:center; font-size:13px; color:#1e293b;">${c.date}${shiftLabel}</span>
                         <span style="display:block; font-size:11px; color:#64748b; font-weight:500; margin-top:2px;">🏢 ${c.businesses?.name || 'Sede'}</span>
                       </td>
                       <td style="padding:15px; color:#475569; font-weight:600;">👤 ${c.users?.name || 'Cajero'}</td>
@@ -1489,11 +1868,13 @@ const render = () => {
                       </td>
                       <td style="padding:15px;">
                         <div style="font-size:11px; line-height:1.6; color:#475569; display:grid; grid-template-columns:1fr 1fr; gap:0 15px; width:280px;">
-                          <div>💵 <b>Efectivo</b>: R: ${formatCurrency(c.cash_amount)} / S: ${formatCurrency(sys.efectivo)}</div>
+                          <div>💵 <b>Efectivo</b>: R: ${formatCurrency(Number(c.cash_amount) - Number(c.next_day_base_amount || 0))} / S: ${formatCurrency(sys.efectivo)}</div>
                           <div>📱 <b>Daviplata</b>: R: ${formatCurrency(c.daviplata_amount)} / S: ${formatCurrency(sys.daviplata)}</div>
                           <div>💳 <b>Addi</b>: R: ${formatCurrency(c.addi_amount)} / S: ${formatCurrency(sys.addi)}</div>
                           <div>💳 <b>Sistecrédito</b>: R: ${formatCurrency(c.sistecredito_amount)} / S: ${formatCurrency(sys.sistecredito)}</div>
                           <div style="grid-column: 1 / -1;">🏦 <b>Nequi/Trans.</b>: R: ${formatCurrency(c.nequi_amount)} / S: ${formatCurrency(sys.nequi)}</div>
+                          <div style="grid-column: 1 / -1;">🎟️ <b>Bonos C.</b>: R: ${formatCurrency(c.bonos_amount || 0)} / S: ${formatCurrency(sys.bonos || 0)}</div>
+                          ${Number(c.next_day_base_amount) > 0 ? `<div style="grid-column: 1 / -1; color:#0369a1;">💰 <b>Base dejada en caja:</b> ${formatCurrency(c.next_day_base_amount)}</div>` : ''}
                         </div>
                         ${(Number(c.other_expenses_amount) > 0 || Number(c.savings_amount) > 0) ? `
                           <div style="margin-top:8px; display:flex; flex-direction:column; gap:4px; max-width:280px; padding:8px; background:rgba(56,189,248,0.05); border:1px dashed rgba(56,189,248,0.2); border-radius:8px;">
@@ -1565,14 +1946,15 @@ const render = () => {
                   <th style="padding:15px;">Tarifa</th>
                   <th style="padding:15px; text-align:center; background:rgba(59,130,246,0.03); border-radius:10px 0 0 10px;">Planilla Fija</th>
                   <th style="padding:15px; text-align:center; background:rgba(16,185,129,0.03);">Marcación Real (GPS)</th>
-                  <th style="padding:15px; text-align:center; background:rgba(245,158,11,0.03); border-radius:0 10px 10px 0;">Desfase / Variación</th>
-                  <th style="padding:15px; text-align:right;">Liquidación</th>
+                  <th style="padding:15px; text-align:center; background:rgba(245,158,11,0.03);">Desfase / Variación</th>
+                  <th style="padding:15px; text-align:right;">Pago Planilla</th>
+                  <th style="padding:15px; text-align:right; border-radius:0 10px 10px 0;">Pago GPS</th>
                 </tr>
               </thead>
               <tbody>
                 ${!state.payrollData ? `
                   <tr>
-                    <td colspan="6" style="text-align:center; padding:60px; background:#f8fafc; border-radius:16px;">
+                    <td colspan="7" style="text-align:center; padding:60px; background:#f8fafc; border-radius:16px;">
                       <div style="font-size:40px; margin-bottom:15px; color:#94a3b8;"><i data-lucide="bar-chart-3" style="width:48px; height:48px;"></i></div>
                       <p style="color:#64748b; font-size:14px; font-weight:600;">Define el rango de fechas arriba y haz clic en Calcular Nómina</p>
                     </td>
@@ -1617,6 +1999,9 @@ const render = () => {
                       </td>
                       <td style="padding:15px; text-align:center; background:rgba(245,158,11,0.02);">
                         ${offsetBadge}
+                      </td>
+                      <td style="padding:15px; border-radius:0; text-align:right;">
+                        <span style="font-size:16px; font-weight:900; color:#3b82f6;">${formatCurrency(data.scheduledPay)}</span>
                       </td>
                       <td style="padding:15px; border-radius:0 12px 12px 0; text-align:right;">
                         <span style="font-size:16px; font-weight:900; color:var(--success);">${formatCurrency(data.pay)}</span>
@@ -1949,15 +2334,17 @@ const render = () => {
               </tr>
             </thead>
             <tbody>
-              ${state.products.sort((a,b) => a.name.localeCompare(b.name)).map(p => `
+              ${state.products.sort((a,b) => a.name.localeCompare(b.name)).map(p => {
+                const genderBadge = p.gender === 'hombre' ? '<span style="font-size:9px; background:#dbeafe; color:#1d4ed8; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👨 H</span>' : p.gender === 'mujer' ? '<span style="font-size:9px; background:#fce7f3; color:#be185d; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👩 M</span>' : p.gender === 'unisex' ? '<span style="font-size:9px; background:#ede9fe; color:#6d28d9; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">⚧️ U</span>' : '';
+                return `
                 <tr style="border-bottom:1px solid #f1f5f9;">
-                  <td style="padding:15px; font-weight:600;">${p.name}</td>
+                  <td style="padding:15px; font-weight:600;">${p.name}${genderBadge}</td>
                   <td style="padding:15px;">${formatCurrency(p.price)}</td>
                   <td style="padding:15px; color:var(--text-muted);">${formatCurrency(p.cost || 0)}</td>
                   <td style="padding:15px;"><span style="background:${p.stock < 5 ? '#fee2e2' : '#f0f9ff'}; color:${p.stock < 5 ? '#b91c1c' : '#0369a1'}; padding:4px 10px; border-radius:10px; font-weight:700;">${p.stock}</span></td>
                   <td style="padding:15px; font-size:11px; color:var(--primary); font-weight:600;">👤 ${state.employees.find(e => e.id === p.created_by)?.name || 'Admin'}</td>
                 </tr>
-              `).join('')}
+              `}).join('')}
             </tbody>
           </table>
         </div>
@@ -2817,11 +3204,28 @@ const render = () => {
     
     const timeFilteredTrx = trx.filter(t => {
       if (state.timeFilter === 'daily') {
+        const isToday = getLocalDate(t.date) === todayStr;
+        if (!isToday) return false;
+        
+        // --- Lógica dinámica de Turnos basada en Cierres de Caja ---
+        const activeBus = state.businesses?.find(b => b.id === state.currentBusinessId);
+        if (activeBus && activeBus.name.toLowerCase().includes('baratillo')) {
+          const todayClosures = (state.cashClosures || [])
+            .filter(c => c.business_id === activeBus.id && c.date === todayStr)
+            .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+            
+          if (todayClosures.length > 0) {
+            const latestClosure = todayClosures[todayClosures.length - 1];
+            // Solo mostramos transacciones hechas DESPUÉS del último cierre
+            return new Date(t.created_at).getTime() > new Date(latestClosure.created_at).getTime();
+          }
+        }
+        
         if (activeUserShift) {
           // Si hay turno activo, filtrar transacciones ocurridas a partir del inicio de este turno
           return new Date(t.date) >= new Date(activeUserShift.start_time);
         }
-        return getLocalDate(t.date) === todayStr;
+        return true;
       }
       
       const tDate = new Date(t.date);
@@ -2970,7 +3374,14 @@ const render = () => {
                 <option value="Efectivo">💵 Efectivo</option>
                 <option value="Addi">💳 Addi</option>
                 <option value="Sistecredito">💳 Sistecredito</option>
-                <option value="Transferencia">🏦 Transferencia</option>
+                <option value="Bonos Coopchipaque">🎟️ Bonos Coopchipaque</option>
+                ${(() => {
+                  const activeBus = state.businesses?.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
+                  return activeBus?.name?.toLowerCase().includes('baratillo')
+                    ? `<option value="Daviplata">📱 Daviplata</option>`
+                    : `<option value="Transferencia">🏦 Transferencia</option>`;
+                })()}
+                <option value="Llano Gas">🔥 Llano Gas</option>
               </select>
             </div>
             <button type="submit" class="btn-primary" style="width:100%; padding:15px; margin-top:10px;">CONFIRMAR VENTA</button>
@@ -3078,6 +3489,19 @@ const render = () => {
             <label>Nombre del Producto</label>
             <input type="text" name="name" class="form-input" placeholder="Ej: Correa cuero" required>
           </div>
+          ${(() => {
+            const ab = state.businesses?.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
+            const jm = ab && (ab.name.toLowerCase().includes('j&m') || ab.name.toLowerCase().includes('j & m'));
+            return jm ? `
+            <div class="form-group">
+              <label style="font-weight:700;">👤 Categoría de Género</label>
+              <div style="display:flex; gap:8px;">
+                <label style="flex:1; display:flex; align-items:center; gap:6px; padding:10px; background:#eff6ff; border:2px solid #bfdbfe; border-radius:10px; cursor:pointer; font-weight:600; font-size:13px;"><input type="radio" name="gender" value="hombre" required> 👨 Hombre</label>
+                <label style="flex:1; display:flex; align-items:center; gap:6px; padding:10px; background:#fdf2f8; border:2px solid #fbcfe8; border-radius:10px; cursor:pointer; font-weight:600; font-size:13px;"><input type="radio" name="gender" value="mujer" required> 👩 Mujer</label>
+                <label style="flex:1; display:flex; align-items:center; gap:6px; padding:10px; background:#f5f3ff; border:2px solid #ddd6fe; border-radius:10px; cursor:pointer; font-weight:600; font-size:13px;"><input type="radio" name="gender" value="unisex" required> ⚧️ Unisex</label>
+              </div>
+            </div>` : '';
+          })()}
           <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
             <div class="form-group">
               <label>Precio Unitario</label>
@@ -3206,6 +3630,20 @@ const render = () => {
             <div id="margin-badge" style="font-size:11px; font-weight:800; padding:8px; border-radius:8px; background:#f1f5f9; text-align:center; margin-bottom:15px; color:var(--text-muted);">
               Margen Estimado: 0%
             </div>
+
+            ${(() => {
+              const selBiz = state.businesses?.find(b => b.id === (state.currentBusinessId));
+              const jmCheck = selBiz && (selBiz.name.toLowerCase().includes('j&m') || selBiz.name.toLowerCase().includes('j & m'));
+              return jmCheck ? `
+            <div class="form-group">
+              <label style="font-weight:700;">👤 Categoría de Género</label>
+              <div style="display:flex; gap:8px;">
+                <label style="flex:1; display:flex; align-items:center; gap:6px; padding:10px; background:#eff6ff; border:2px solid #bfdbfe; border-radius:10px; cursor:pointer; font-weight:600; font-size:12px;"><input type="radio" name="gender" value="hombre"> 👨 Hombre</label>
+                <label style="flex:1; display:flex; align-items:center; gap:6px; padding:10px; background:#fdf2f8; border:2px solid #fbcfe8; border-radius:10px; cursor:pointer; font-weight:600; font-size:12px;"><input type="radio" name="gender" value="mujer"> 👩 Mujer</label>
+                <label style="flex:1; display:flex; align-items:center; gap:6px; padding:10px; background:#f5f3ff; border:2px solid #ddd6fe; border-radius:10px; cursor:pointer; font-weight:600; font-size:12px;"><input type="radio" name="gender" value="unisex"> ⚧️ Unisex</label>
+              </div>
+            </div>` : '';
+            })()}
 
             <div class="form-group">
               <label>Stock Inicial</label>
@@ -3372,8 +3810,13 @@ const render = () => {
 
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px;">
               <div class="form-group">
-                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Efectivo ($)</label>
+                <label style="color:#94a3b8; font-size:11px; font-weight:700;">Efectivo Total Gaveta ($)</label>
                 <input type='text' inputmode='numeric' name="cash_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+              </div>
+              
+              <div class="form-group">
+                <label style="color:#38bdf8; font-size:11px; font-weight:700;">Base para día siguiente ($)</label>
+                <input type='text' inputmode='numeric' name="next_day_base_amount" class="form-input currency-input" style="background:rgba(56,189,248,0.05); border:1px solid rgba(56,189,248,0.3); color:#38bdf8;" min="0" placeholder="0" value="0">
               </div>
               
               <div class="form-group">
@@ -3395,6 +3838,11 @@ const render = () => {
             <div class="form-group" style="margin-top:12px;">
               <label style="color:#94a3b8; font-size:11px; font-weight:700;">Nequi / Transferencia ($)</label>
               <input type='text' inputmode='numeric' name="nequi_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
+            </div>
+
+            <div class="form-group" style="margin-top:12px;">
+              <label style="color:#94a3b8; font-size:11px; font-weight:700;">Bonos Coopchipaque ($)</label>
+              <input type='text' inputmode='numeric' name="bonos_amount" class="form-input currency-input" style="background:#1e293b; border:1px solid rgba(255,255,255,0.1); color:white;" required min="0" placeholder="0" value="0">
             </div>
 
             <!-- ➕ SECCIÓN DE GASTOS EXTRAS / ALCANCÍA -->
@@ -4422,9 +4870,18 @@ window.generateAdminSalesReportPDF = async () => {
         const items = state.saleItems.filter(si => si.sale_id === sale.id);
         const bizIdsFromProducts = items.map(i => i.products?.business_id).filter(Boolean);
         const saleShortId = sale.id.slice(0, 5);
-        const bizIdsFromTransactions = state.transactions
-          .filter(t => t.note && t.note.includes(saleShortId))
-          .map(t => t.business_id);
+        let relatedTx = state.transactions.filter(t => t.note && t.note.includes(saleShortId));
+        
+        if (relatedTx.length === 0 && sale.note && sale.note.startsWith('Venta informal: ')) {
+          const descPart = sale.note.replace('Venta informal: ', '').trim();
+          relatedTx = state.transactions.filter(tx => tx.type === 'income' && tx.user_id === sale.user_id && (tx.description === descPart || tx.description === 'Venta Rápida: ' + descPart) && Math.abs(new Date(tx.date) - new Date(sale.created_at)) < 120000);
+        }
+        
+        if (relatedTx.length === 0 && bizIdsFromProducts.length === 0) {
+          relatedTx = state.transactions.filter(tx => tx.type === 'income' && tx.user_id === sale.user_id && Math.abs(new Date(tx.date) - new Date(sale.created_at)) < 60000);
+        }
+
+        const bizIdsFromTransactions = relatedTx.map(t => t.business_id);
         const allBizIds = [...new Set([...bizIdsFromProducts, ...bizIdsFromTransactions])];
         return allBizIds.includes(bizId);
       });
@@ -4490,6 +4947,11 @@ window.generateAdminSalesReportPDF = async () => {
     let totalRevenue = 0;
     let totalCost = 0;
     let totalUnits = 0;
+    const paymentBreakdown = { Efectivo: 0, Sistecredito: 0, Addi: 0, 'Llano Gas': 0, Transferencia: 0, Daviplata: 0, 'Bonos Coopchipaque': 0 };
+    
+    // Nuevas métricas analíticas
+    const sellerPerformance = {};
+    const productPerformance = {};
 
     filteredSales.forEach(sale => {
       const items = state.saleItems.filter(si => si.sale_id === sale.id);
@@ -4504,9 +4966,21 @@ window.generateAdminSalesReportPDF = async () => {
       // Vendedor
       const sellerObj = state.employees?.find(emp => emp.id === sale.user_id) || (state.user?.id === sale.user_id ? state.user : null);
       const sellerName = sellerObj?.name || 'Asignado';
+      
+      const saleTotal = parseFloat(sale.total) || 0;
+
+      // Métricas Vendedor
+      if (!sellerPerformance[sellerName]) sellerPerformance[sellerName] = { total: 0, count: 0 };
+      sellerPerformance[sellerName].total += saleTotal;
+      sellerPerformance[sellerName].count += 1;
 
       // Forma de Pago
-      const payMethod = sale.payment_method || 'Efectivo';
+      let payMethod = sale.payment_method || 'Efectivo';
+      if (payMethod.toLowerCase().includes('daviplata')) {
+        payMethod = 'Daviplata';
+      } else if (payMethod.toLowerCase().includes('nequi') || payMethod.toLowerCase().includes('transferencia')) {
+        payMethod = 'Transferencia';
+      }
 
       // Detalle textual concatenado de productos con recopilación de costos históricos
       let productsLabel = items.map(i => {
@@ -4540,6 +5014,18 @@ window.generateAdminSalesReportPDF = async () => {
         const itemQty = Number(i.quantity) || 1;
         totalUnits += itemQty;
         totalCost += (pCost * itemQty);
+        
+        let productBizId = i.products?.business_id;
+        if (!productBizId) {
+          const linkedProd = state.products.find(p => p.id === i.product_id);
+          if (linkedProd) productBizId = linkedProd.business_id;
+        }
+
+        // Solo agregar al Top de Productos si el producto pertenece a la sede consultada
+        if (bizId === 'all' || !productBizId || productBizId === bizId) {
+          if (!productPerformance[pName]) productPerformance[pName] = 0;
+          productPerformance[pName] += itemQty;
+        }
 
         return `${pName} [x${itemQty}]`;
       }).join(', ');
@@ -4549,8 +5035,10 @@ window.generateAdminSalesReportPDF = async () => {
       }
 
       // CORRECCIÓN CRÍTICA: Usar 'sale.total' en vez de 'total_amount'
-      const saleTotal = parseFloat(sale.total) || 0;
       totalRevenue += saleTotal;
+
+      if (!paymentBreakdown[payMethod]) paymentBreakdown[payMethod] = 0;
+      paymentBreakdown[payMethod] += saleTotal;
 
       const dateObj = new Date(sale.created_at);
       const dateStr = `${dateObj.getDate().toString().padStart(2,'0')}/${(dateObj.getMonth()+1).toString().padStart(2,'0')} ${dateObj.getHours().toString().padStart(2,'0')}:${dateObj.getMinutes().toString().padStart(2,'0')}`;
@@ -4651,69 +5139,181 @@ window.generateAdminSalesReportPDF = async () => {
 
     const rectY = finalY > 135 ? 20 : finalY;
 
+    // Si el local es Baratillo, los costos de mercancía no se manejan, forzamos a 0
+    if (bizName.toLowerCase().includes('baratillo')) {
+      totalCost = 0;
+    }
+
     // Cálculos Avanzados de EBITDA, Flujo de Caja y Utilidad Total
-    const totalOpExpenses = filteredExpenses.reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
-    const cashBalance = totalRevenue - totalOpExpenses; // Lo que físicamente debería haber en cuentas y caja
+    let totalOpExpenses = 0;
+    let cashExpenses = 0;
+    const expenseBreakdown = {};
+
+    filteredExpenses.forEach(t => {
+       const amt = parseFloat(t.amount) || 0;
+       totalOpExpenses += amt;
+       const payMethod = (t.payment_method || 'Efectivo').toLowerCase();
+       if (payMethod === 'efectivo') cashExpenses += amt;
+       const catName = state.categories.find(c => c.id === t.category_id)?.name || 'Gasto General';
+       if (!expenseBreakdown[catName]) expenseBreakdown[catName] = 0;
+       expenseBreakdown[catName] += amt;
+    });
+
+    const cashRevenue = paymentBreakdown.Efectivo || 0;
+    const digitalRevenue = totalRevenue - cashRevenue;
+    const cashBalance = cashRevenue - cashExpenses; // Físicamente en Caja
+
     const realProfit = totalRevenue - totalCost - totalOpExpenses; // EBITDA Patrimonial Neto Real
     const profitMarginPct = totalRevenue > 0 ? ((realProfit / totalRevenue) * 100) : 0;
+    
+    // Métricas analíticas extras
+    const totalTrx = filteredSales.length;
+    const avgTicket = totalTrx > 0 ? totalRevenue / totalTrx : 0;
+
+    // Calcular altura del cuadro dinámicamente
+    const usedPayMethods = Object.entries(paymentBreakdown).filter(([_, amt]) => amt > 0);
+    const usedExpCategories = Object.entries(expenseBreakdown).filter(([_, amt]) => amt > 0);
+    const topSellers = Object.entries(sellerPerformance).sort((a,b) => b[1].total - a[1].total);
+    const topProducts = Object.entries(productPerformance).sort((a,b) => b[1] - a[1]).slice(0,3);
+
+    const dynamicHeight = 90 + (usedPayMethods.length * 4) + (usedExpCategories.length * 4) + (topSellers.length * 4) + (topProducts.length * 4);
 
     // Dibujar contenedor estilizado de Balance General
     doc.setFillColor(248, 250, 252); // Gris neutro suave
     doc.setDrawColor(203, 213, 225); // Borde pizarra
-    doc.rect(155, rectY - 8, 127, 60, 'FD'); // Cuadro amplio
+    doc.rect(155, rectY - 8, 127, dynamicHeight, 'FD'); // Cuadro amplio dinámico
     
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
     
     // BLOQUE A: Balance Físico de Flujo de Caja
     doc.setTextColor(30, 41, 59);
-    doc.text("💵 BALANCE DE FLUJO DE CAJA POS", 160, rectY);
+    doc.text("[=] BALANCE DE FLUJO DE CAJA POS", 160, rectY);
     
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
     doc.text(`(+) Ingresos por Ventas:`, 160, rectY + 6);
     doc.text(`${formatCurrency(totalRevenue)}`, 240, rectY + 6);
 
+    let currentOffsetY = rectY + 11;
+    usedPayMethods.forEach(([method, amt]) => {
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`      > ${method}:`, 160, currentOffsetY);
+      doc.text(`${formatCurrency(amt)}`, 240, currentOffsetY);
+      currentOffsetY += 4;
+    });
+
     doc.setTextColor(185, 28, 28);
-    doc.text(`(-) Gastos Operativos:`, 160, rectY + 12);
-    doc.text(`(${formatCurrency(totalOpExpenses)})`, 240, rectY + 12);
+    doc.setFontSize(8.5);
+    doc.text(`(-) Gastos Operativos:`, 160, currentOffsetY + 2);
+    doc.text(`(${formatCurrency(totalOpExpenses)})`, 240, currentOffsetY + 2);
+    
+    currentOffsetY += 6;
+    usedExpCategories.forEach(([cat, amt]) => {
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      doc.text(`      > ${cat}:`, 160, currentOffsetY);
+      doc.text(`(${formatCurrency(amt)})`, 240, currentOffsetY);
+      currentOffsetY += 4;
+    });
 
     doc.setDrawColor(226, 232, 240);
-    doc.line(160, rectY + 15, 277, rectY + 15);
+    doc.line(160, currentOffsetY + 1, 277, currentOffsetY + 1);
 
     doc.setFont("helvetica", "bold");
     doc.setTextColor(30, 41, 59);
-    doc.text(`📊 DISPONIBLE TOTAL CAJA:`, 160, rectY + 19);
-    doc.text(`${formatCurrency(cashBalance)}`, 240, rectY + 19);
+    doc.setFontSize(8.5);
+    doc.text(`[+] DISPONIBLE FÍSICO EN CAJA (Efectivo):`, 160, currentOffsetY + 6);
+    doc.text(`${formatCurrency(cashBalance)}`, 240, currentOffsetY + 6);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`[+] Dinero en Cuentas (Transf/Digital):`, 160, currentOffsetY + 11);
+    doc.text(`${formatCurrency(digitalRevenue)}`, 240, currentOffsetY + 11);
 
     // Línea divisoria de bloques contables
     doc.setDrawColor(148, 163, 184);
-    doc.line(160, rectY + 24, 277, rectY + 24);
+    doc.line(160, currentOffsetY + 15, 277, currentOffsetY + 15);
 
     // BLOQUE B: Estado de Resultados (EBITDA)
     doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
     doc.setTextColor(13, 148, 136); // Turquesa de rentabilidad
-    doc.text("📈 ESTADO DE RESULTADOS (EBITDA)", 160, rectY + 30);
+    doc.text("[*] ESTADO DE RESULTADOS (EBITDA)", 160, currentOffsetY + 21);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8.5);
     doc.setTextColor(30, 41, 59);
-    doc.text(`(-) Costos de Mercancía:`, 160, rectY + 36);
-    doc.text(`(${formatCurrency(totalCost)})`, 240, rectY + 36);
+    
+    if (bizName.toLowerCase().includes('baratillo')) {
+      doc.text(`(-) Costos de Mercancía:`, 160, currentOffsetY + 27);
+      doc.text(`(NO APLICA)`, 240, currentOffsetY + 27);
+    } else {
+      doc.text(`(-) Costos de Mercancía:`, 160, currentOffsetY + 27);
+      doc.text(`(${formatCurrency(totalCost)})`, 240, currentOffsetY + 27);
+    }
 
     doc.setDrawColor(226, 232, 240);
-    doc.line(160, rectY + 39, 277, rectY + 39);
+    doc.line(160, currentOffsetY + 30, 277, currentOffsetY + 30);
 
     doc.setFont("helvetica", "bold");
     doc.setTextColor(15, 23, 42);
     doc.setFontSize(10.5);
-    doc.text(`UTILIDAD NETA REAL:`, 160, rectY + 44);
-    doc.text(`${formatCurrency(realProfit)}`, 240, rectY + 44);
+    doc.text(`UTILIDAD NETA REAL:`, 160, currentOffsetY + 35);
+    doc.text(`${formatCurrency(realProfit)}`, 240, currentOffsetY + 35);
 
     doc.setTextColor(13, 148, 136); 
     doc.setFontSize(10);
-    doc.text(`MARGEN REAL BRUTO:`, 160, rectY + 50);
-    doc.text(`${profitMarginPct.toFixed(2)}%`, 240, rectY + 50);
+    doc.text(`MARGEN REAL BRUTO:`, 160, currentOffsetY + 41);
+    doc.text(`${profitMarginPct.toFixed(2)}%`, 240, currentOffsetY + 41);
+
+    // Línea divisoria analíticas
+    doc.setDrawColor(148, 163, 184);
+    doc.line(160, currentOffsetY + 45, 277, currentOffsetY + 45);
+
+    // BLOQUE C: Métricas y Rendimiento Comercial
+    doc.setFontSize(9);
+    doc.setTextColor(30, 41, 59);
+    doc.text("[i] RENDIMIENTO Y MÉTRICAS COMERCIALES", 160, currentOffsetY + 51);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text(`Total Transacciones (Facturas):`, 160, currentOffsetY + 56);
+    doc.text(`${totalTrx}`, 240, currentOffsetY + 56);
+    doc.text(`Ticket Promedio de Venta:`, 160, currentOffsetY + 60);
+    doc.text(`${formatCurrency(avgTicket)}`, 240, currentOffsetY + 60);
+
+    currentOffsetY += 66;
+
+    if (topSellers.length > 0) {
+      doc.setFont("helvetica", "bold");
+      doc.text(`Rendimiento por Asesor:`, 160, currentOffsetY);
+      doc.setFont("helvetica", "normal");
+      currentOffsetY += 4;
+      topSellers.forEach(([seller, perf]) => {
+         doc.setFontSize(7.5);
+         doc.text(`      > ${seller}:`, 160, currentOffsetY);
+         doc.text(`${formatCurrency(perf.total)} (${perf.count} ventas)`, 240, currentOffsetY);
+         currentOffsetY += 4;
+      });
+    }
+
+    if (topProducts.length > 0 && !bizName.toLowerCase().includes('baratillo')) {
+      currentOffsetY += 2;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.text(`Top 3 Artículos Más Vendidos:`, 160, currentOffsetY);
+      doc.setFont("helvetica", "normal");
+      currentOffsetY += 4;
+      topProducts.forEach(([prod, qty], index) => {
+         doc.setFontSize(7.5);
+         doc.text(`      ${index + 1}. ${prod}`, 160, currentOffsetY);
+         doc.text(`${qty} unds.`, 240, currentOffsetY);
+         currentOffsetY += 4;
+      });
+    }
 
     // 🚀 BÚNKER DE DESPACHO INDESTRUCTIBLE (NATIVO -> COMPARTIR -> DESCARGA)
 
@@ -4787,6 +5387,493 @@ window.generateAdminSalesReportPDF = async () => {
   } catch (error) {
     console.error("Error fatal en auditoría PDF Admin:", error);
     window.showToast("❌ Error crítico e inesperado al sintetizar la auditoría.", "danger");
+  }
+};
+
+window.sendTelegramSalesReport = async (period, isHistorical = false, silent = false) => {
+  try {
+    if (!silent) window.showToast(`⏳ Generando reporte ${period} para Telegram...`, "info");
+
+    const getBogotaDateStr = (date = new Date()) => {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      return formatter.format(date);
+    };
+
+    const now = new Date();
+    let startMs, endMs, periodLabel, dateRangeLabel, periodId;
+
+    if (isHistorical) {
+      if (period === 'daily') {
+        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        const yDateStr = getBogotaDateStr(yesterday);
+        startMs = new Date(yDateStr + 'T00:00:00-05:00').getTime();
+        endMs = new Date(yDateStr + 'T23:59:59-05:00').getTime();
+        periodLabel = 'DIARIO (AYER)';
+        dateRangeLabel = yDateStr;
+        periodId = `daily_${yDateStr}`;
+      } else if (period === 'weekly') {
+        const day = now.getDay();
+        const diffToMonday = now.getDate() - day + (day === 0 ? -6 : 1);
+        const mondayThisWeek = new Date(now.getFullYear(), now.getMonth(), diffToMonday);
+        const lastMonday = new Date(mondayThisWeek.getTime() - 7 * 24 * 60 * 60 * 1000);
+        const lastSunday = new Date(lastMonday.getTime() + 6 * 24 * 60 * 60 * 1000);
+        const lmStr = getBogotaDateStr(lastMonday);
+        const lsStr = getBogotaDateStr(lastSunday);
+        startMs = new Date(lmStr + 'T00:00:00-05:00').getTime();
+        endMs = new Date(lsStr + 'T23:59:59-05:00').getTime();
+        periodLabel = 'SEMANAL (SEMANA ANTERIOR)';
+        dateRangeLabel = `${lmStr}_al_${lsStr}`;
+        periodId = `weekly_${lmStr}_${lsStr}`;
+      } else if (period === 'monthly') {
+        const startThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const lastMonth = new Date(startThisMonth.getFullYear(), startThisMonth.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(startThisMonth.getTime() - 24 * 60 * 60 * 1000);
+        const lmStr = getBogotaDateStr(lastMonth);
+        const lmeStr = getBogotaDateStr(lastMonthEnd);
+        startMs = new Date(lmStr + 'T00:00:00-05:00').getTime();
+        endMs = new Date(lmeStr + 'T23:59:59-05:00').getTime();
+        const year = lastMonth.getFullYear();
+        const month = (lastMonth.getMonth() + 1).toString().padStart(2, '0');
+        periodLabel = `MENSUAL (${year}-${month})`;
+        dateRangeLabel = `${year}-${month}`;
+        periodId = `monthly_${year}_${month}`;
+      }
+    } else {
+      if (period === 'daily') {
+        const todayStr = getBogotaDateStr(now);
+        startMs = new Date(todayStr + 'T00:00:00-05:00').getTime();
+        endMs = new Date(todayStr + 'T23:59:59-05:00').getTime();
+        periodLabel = 'DIARIO (HOY)';
+        dateRangeLabel = todayStr;
+        periodId = `daily_live_${todayStr}`;
+      } else if (period === 'weekly') {
+        const day = now.getDay();
+        const diffToMonday = now.getDate() - day + (day === 0 ? -6 : 1);
+        const monday = new Date(now.getFullYear(), now.getMonth(), diffToMonday);
+        const sunday = new Date(monday.getTime() + 6 * 24 * 60 * 60 * 1000);
+        const mStr = getBogotaDateStr(monday);
+        const sStr = getBogotaDateStr(sunday);
+        startMs = new Date(mStr + 'T00:00:00-05:00').getTime();
+        endMs = new Date(sStr + 'T23:59:59-05:00').getTime();
+        periodLabel = 'SEMANAL (ESTA SEMANA)';
+        dateRangeLabel = `${mStr}_al_${sStr}`;
+        periodId = `weekly_live_${mStr}`;
+      } else if (period === 'monthly') {
+        const start = new Date(now.getFullYear(), now.getMonth(), 1);
+        const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        const sStr = getBogotaDateStr(start);
+        const eStr = getBogotaDateStr(end);
+        startMs = new Date(sStr + 'T00:00:00-05:00').getTime();
+        endMs = new Date(eStr + 'T23:59:59-05:00').getTime();
+        const year = now.getFullYear();
+        const month = (now.getMonth() + 1).toString().padStart(2, '0');
+        periodLabel = `MENSUAL (${year}-${month})`;
+        dateRangeLabel = `${year}-${month}`;
+        periodId = `monthly_live_${year}-${month}`;
+      }
+    }
+
+    let filteredSales = state.sales.filter(sale => {
+      const saleTime = new Date(sale.created_at).getTime();
+      return saleTime >= startMs && saleTime <= endMs;
+    });
+
+    let filteredExpenses = state.transactions.filter(t => {
+      if (t.type !== 'expense') return false;
+      const tTime = new Date(t.date || t.created_at).getTime();
+      return tTime >= startMs && tTime <= endMs;
+    });
+
+    if (filteredSales.length === 0 && filteredExpenses.length === 0) {
+      if (!silent) window.showToast(`ℹ️ No se registraron movimientos en el periodo ${periodLabel}.`, "warning");
+      return;
+    }
+
+    const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+
+    doc.setFillColor(15, 23, 42);
+    doc.rect(0, 0, 297, 32, 'F');
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(16);
+    doc.setFont("helvetica", "bold");
+    doc.text(`SURTIHOGAR G&C - REPORTE DE VENTAS ${periodLabel}`, 15, 15);
+    
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(148, 163, 184);
+    doc.text("Planilla de Control y Resumen Financiero Consolidado • Telegram Auto-Report System", 15, 23);
+
+    doc.setTextColor(30, 41, 59);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("DETALLE DEL PERIODO", 15, 45);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.text(`Tipo de Reporte: ${periodLabel}`, 15, 51);
+    doc.text(`Rango de Fechas: ${dateRangeLabel.replace(/_/g, ' ')}`, 15, 57);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("AUDITORÍA DE TELEGRAM", 180, 45);
+    doc.setFont("helvetica", "normal");
+    doc.text(`Generado automáticamente para el canal administrativo`, 180, 51);
+    doc.text(`Fecha de Emisión: ${new Date().toLocaleString('es-CO')}`, 180, 57);
+
+    doc.setDrawColor(226, 232, 240);
+    doc.line(15, 65, 282, 65);
+
+    const head = [['REF / FECHA', 'SEDE', 'VENDEDOR', 'DETALLE DE PRODUCTOS', 'PAGO', 'TOTAL NETO']];
+    const body = [];
+    let totalRevenue = 0;
+    let totalCost = 0;
+    let totalUnits = 0;
+    const paymentBreakdown = { Efectivo: 0, Sistecredito: 0, Addi: 0, 'Llano Gas': 0, Transferencia: 0, Daviplata: 0, 'Bonos Coopchipaque': 0 };
+    
+    filteredSales.forEach(sale => {
+      const items = state.saleItems.filter(si => si.sale_id === sale.id);
+      const bizIdsFromProducts = items.map(i => i.products?.business_id).filter(Boolean);
+      const saleShortId = sale.id.slice(0, 5);
+      const bizIdsFromTransactions = state.transactions.filter(t => t.note && t.note.includes(saleShortId)).map(t => t.business_id);
+      const allBizIds = [...new Set([...bizIdsFromProducts, ...bizIdsFromTransactions])];
+      const bizNames = allBizIds.map(id => state.businesses.find(b => b.id === id)?.name || 'General').join(', ');
+
+      const sellerObj = state.employees?.find(emp => emp.id === sale.user_id) || (state.user?.id === sale.user_id ? state.user : null);
+      const sellerName = sellerObj?.name || 'Asignado';
+      const saleTotal = parseFloat(sale.total) || 0;
+
+      let payMethod = sale.payment_method || 'Efectivo';
+      if (payMethod.toLowerCase().includes('daviplata')) payMethod = 'Daviplata';
+      else if (payMethod.toLowerCase().includes('nequi') || payMethod.toLowerCase().includes('transferencia')) payMethod = 'Transferencia';
+
+      let productsLabel = items.map(i => {
+        let pName = i.products?.name;
+        let pCost = parseFloat(i.products?.cost) || 0;
+        if (!pName) {
+          const linkedProd = state.products.find(p => p.id === i.product_id);
+          if (linkedProd) {
+            pName = linkedProd.name;
+            pCost = parseFloat(linkedProd.cost) || 0;
+          }
+        }
+        if (!pName) {
+          const pending = state.pendingProducts.find(pp => pp.sale_id === sale.id);
+          if (pending) {
+            pName = `${pending.name} (Pte.)`;
+            pCost = parseFloat(pending.cost) || 0;
+          } else if (sale.note && sale.note.includes('Venta informal')) {
+            pName = sale.note.replace('Venta informal: ', '');
+            pCost = 0;
+          } else {
+            pName = 'Producto Especial';
+            pCost = 0;
+          }
+        }
+        const itemQty = Number(i.quantity) || 1;
+        totalUnits += itemQty;
+        totalCost += (pCost * itemQty);
+        return `${pName} [x${itemQty}]`;
+      }).join(', ');
+
+      if (!productsLabel && sale.note && sale.note.includes('Venta informal')) {
+        productsLabel = sale.note.replace('Venta informal: ', '').trim() + ' (Directa)';
+      }
+
+      totalRevenue += saleTotal;
+      if (!paymentBreakdown[payMethod]) paymentBreakdown[payMethod] = 0;
+      paymentBreakdown[payMethod] += saleTotal;
+
+      const dateObj = new Date(sale.created_at);
+      const dateStr = `${dateObj.getDate().toString().padStart(2,'0')}/${(dateObj.getMonth()+1).toString().padStart(2,'0')} ${dateObj.getHours().toString().padStart(2,'0')}:${dateObj.getMinutes().toString().padStart(2,'0')}`;
+
+      body.push([
+        `#${sale.id.slice(0, 8).toUpperCase()}\n${dateStr}`,
+        bizNames || 'Surtihogar',
+        sellerName,
+        productsLabel || 'Venta directa en POS',
+        payMethod.toUpperCase(),
+        formatCurrency(saleTotal)
+      ]);
+    });
+
+    autoTable(doc, {
+      startY: 72,
+      head: head,
+      body: body,
+      theme: 'grid',
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5, cellPadding: 4 },
+      styles: { fontSize: 8, cellPadding: 3.5, font: 'helvetica', overflow: 'linebreak' },
+      columnStyles: {
+        0: { cellWidth: 35, fontStyle: 'bold' },
+        1: { cellWidth: 35 },
+        2: { cellWidth: 35 },
+        3: { cellWidth: 120 },
+        4: { cellWidth: 25, halign: 'center' },
+        5: { halign: 'right', fontStyle: 'bold', cellWidth: 32 }
+      }
+    });
+
+    if (filteredExpenses.length > 0) {
+      let currentY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 72) + 15;
+      if (currentY > 175) {
+        doc.addPage();
+        currentY = 20;
+      }
+
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(185, 28, 28);
+      doc.text("📄 DESGLOSE DE EGRESOS Y GASTOS OPERATIVOS REGISTRADOS", 15, currentY);
+      
+      const expenseHead = [['REF / FECHA', 'SEDE / LOCAL', 'RESPONSABLE', 'MOTIVO / DETALLE', 'PAGO', 'MONTO GASTO']];
+      const expenseBody = filteredExpenses.map(t => {
+        const bizNameObj = state.businesses.find(b => b.id === t.business_id)?.name || 'General';
+        const userObj = state.employees?.find(e => e.id === t.user_id) || (state.user?.id === t.user_id ? state.user : null);
+        const userName = userObj?.name || 'Colaborador';
+        const catName = state.categories.find(c => c.id === t.category_id)?.name || 'Gasto General';
+        const desc = t.description ? `(${t.description})` : (t.note ? `(${t.note})` : '');
+        const finalMotivo = `${catName} ${desc}`;
+        const dateObj = new Date(t.date || t.created_at);
+        const dateStr = `${dateObj.getDate().toString().padStart(2,'0')}/${(dateObj.getMonth()+1).toString().padStart(2,'0')} ${dateObj.getHours().toString().padStart(2,'0')}:${dateObj.getMinutes().toString().padStart(2,'0')}`;
+
+        return [
+          `#TRX-${(t.id || '').slice(0,6).toUpperCase()}\n${dateStr}`,
+          bizNameObj,
+          userName,
+          finalMotivo,
+          (t.payment_method || 'Efectivo').toUpperCase(),
+          formatCurrency(parseFloat(t.amount) || 0)
+        ];
+      });
+
+      autoTable(doc, {
+        startY: currentY + 4,
+        head: expenseHead,
+        body: expenseBody,
+        theme: 'grid',
+        headStyles: { fillColor: [185, 28, 28], textColor: [255, 255, 255], fontStyle: 'bold', fontSize: 8.5, cellPadding: 4 },
+        styles: { fontSize: 8, cellPadding: 3.5, font: 'helvetica', overflow: 'linebreak' },
+        columnStyles: {
+          0: { cellWidth: 35, fontStyle: 'bold' },
+          1: { cellWidth: 35 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 120 },
+          4: { cellWidth: 25, halign: 'center' },
+          5: { halign: 'right', fontStyle: 'bold', cellWidth: 32, textColor: [185, 28, 28] }
+        }
+      });
+    }
+
+    const finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 100) + 15;
+    if (finalY > 135) {
+      doc.addPage();
+      doc.setPage(doc.getNumberOfPages());
+    }
+    const rectY = finalY > 135 ? 20 : finalY;
+
+    let totalOpExpenses = 0;
+    let cashExpenses = 0;
+    filteredExpenses.forEach(t => {
+       const amt = parseFloat(t.amount) || 0;
+       totalOpExpenses += amt;
+       if ((t.payment_method || 'Efectivo').toLowerCase() === 'efectivo') cashExpenses += amt;
+    });
+
+    const cashRevenue = paymentBreakdown.Efectivo || 0;
+    const digitalRevenue = totalRevenue - cashRevenue;
+    const cashBalance = cashRevenue - cashExpenses;
+
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(15, rectY, 267, 45, 'FD');
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.text("RESUMEN DE SALDOS FINANCIEROS DEL PERIODO", 20, rectY + 8);
+
+    doc.setFontSize(8.5);
+    doc.setFont("helvetica", "normal");
+    doc.text(`• Total Ventas Netas: ${formatCurrency(totalRevenue)}`, 20, rectY + 16);
+    doc.text(`• Ingresos Recibidos en Efectivo: ${formatCurrency(cashRevenue)}`, 20, rectY + 23);
+    doc.text(`• Ingresos Recibidos en Digital: ${formatCurrency(digitalRevenue)}`, 20, rectY + 30);
+    doc.text(`• Unidades Totales Despachadas: ${totalUnits} unds`, 20, rectY + 37);
+
+    doc.text(`• Total Gastos Operativos: ${formatCurrency(totalOpExpenses)}`, 140, rectY + 16);
+    doc.text(`• Gastos Pagados en Efectivo: ${formatCurrency(cashExpenses)}`, 140, rectY + 23);
+    
+    const netEbitda = totalRevenue - totalCost - totalOpExpenses;
+    doc.setFont("helvetica", "bold");
+    doc.text(`• FLUJO EFECTIVO CAJA (Efectivo Ventas - Efectivo Gastos): ${formatCurrency(cashBalance)}`, 140, rectY + 30);
+    doc.setTextColor(netEbitda >= 0 ? 21 : 185, netEbitda >= 0 ? 128 : 28, netEbitda >= 0 ? 61 : 28);
+    doc.text(`• EXCEDENTE NETO ESTIMADO (Ventas - Costos - Gastos): ${formatCurrency(netEbitda)}`, 140, rectY + 37);
+
+    const { data: configs } = await supabase
+      .from('system_logs')
+      .select('message')
+      .eq('type', 'TELEGRAM_CONFIG')
+      .order('timestamp', { ascending: false })
+      .limit(1);
+
+    let config = null;
+    if (configs && configs.length > 0) config = JSON.parse(configs[0].message);
+
+    const botToken = (config && config.botToken) ? config.botToken : '8037545998:AAH4zgAxhoNbZ1WKJXmCElwq7oHzi7IJ1LY';
+    const chatId = (config && config.chatId) ? config.chatId : '6736325362,8676279926';
+
+    if (!botToken || !chatId) {
+      console.warn("Falta token o chatid.");
+      return;
+    }
+
+    const rawBlob = doc.output('blob');
+    const cleanLabel = periodLabel.replace(/\s+/g, '_');
+    const safeName = `Reporte_Ventas_${cleanLabel}_${dateRangeLabel}.pdf`;
+    
+    const chatIds = chatId.split(',').map(id => id.trim()).filter(Boolean);
+    let anySuccess = false;
+    let errorMsg = '';
+
+    for (const id of chatIds) {
+      try {
+        const formData = new FormData();
+        formData.append('chat_id', id);
+        formData.append('caption', `📊 <b>REPORTE DE VENTAS ${periodLabel}</b>\n📅 Rango: <code>${dateRangeLabel.replace(/_/g, ' ')}</code>\n🕒 Generado: ${new Date().toLocaleString('es-CO')}\n💰 Total Ventas: <b>${formatCurrency(totalRevenue)}</b>\n🔻 Gastos: <b>${formatCurrency(totalOpExpenses)}</b>\n📈 Neto: <b>${formatCurrency(netEbitda)}</b>`);
+        formData.append('parse_mode', 'HTML');
+        formData.append('document', rawBlob, safeName);
+
+        const res = await fetch(`https://api.telegram.org/bot${botToken}/sendDocument`, {
+          method: 'POST',
+          body: formData
+        });
+        const result = await res.json();
+        if (result.ok) {
+          anySuccess = true;
+        } else {
+          console.error(`Error Telegram para chat ${id}:`, result);
+          errorMsg = result.description || 'Fallo de API';
+        }
+      } catch (err) {
+        console.error(`Excepción enviando a Telegram chat ${id}:`, err);
+        errorMsg = err.message;
+      }
+    }
+
+    if (anySuccess) {
+      // Registrar log local para blindaje contra duplicidad inmediata
+      localStorage.setItem(`telegram_report_sent_v1_${periodId}`, 'true');
+
+      if (!silent) window.showToast(`✅ Reporte ${periodLabel} enviado a Telegram!`, "success");
+      
+      try {
+        await supabase.from('system_logs').insert({
+          type: 'TELEGRAM_REPORT_SENT',
+          module: 'Reportes',
+          user_id: state.user?.id || null,
+          message: JSON.stringify({ periodId, timestamp: new Date().toISOString() })
+        });
+      } catch(dbErr) {
+        console.warn("Log de reporte enviado no guardado en Supabase (RLS), pero guardado localmente en localStorage:", dbErr.message);
+      }
+    } else {
+      if (!silent) window.showToast(`❌ Error enviando a Telegram: ${errorMsg}`, "danger");
+    }
+  } catch (err) {
+    console.error("Error enviando reporte a Telegram:", err);
+    if (!silent) window.showToast("❌ Error al generar o enviar el reporte PDF.", "danger");
+  }
+};
+
+window.runAutomaticTelegramReports = async () => {
+  if (state.user?.role !== 'admin') return;
+  if (state.runningAutoReports) return;
+  state.runningAutoReports = true;
+
+  try {
+    const getBogotaDateStr = (date = new Date()) => {
+      const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Bogota',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+      });
+      return formatter.format(date);
+    };
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+    const { data: sentLogs } = await supabase
+      .from('system_logs')
+      .select('message')
+      .eq('type', 'TELEGRAM_REPORT_SENT')
+      .gte('timestamp', thirtyDaysAgo.toISOString());
+
+    const sentSet = new Set();
+    if (sentLogs) {
+      sentLogs.forEach(l => {
+        try {
+          const parsed = JSON.parse(l.message);
+          if (parsed && parsed.periodId) sentSet.add(parsed.periodId);
+        } catch(e) {}
+      });
+    }
+
+    const now = new Date();
+
+    // A. Reporte Diario de AYER
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const yDateStr = getBogotaDateStr(yesterday);
+    const dailyId = `daily_${yDateStr}`;
+    const localSentDaily = localStorage.getItem(`telegram_report_sent_v1_${dailyId}`) === 'true';
+    if (!localSentDaily && !sentSet.has(dailyId)) {
+      console.log(`[AUTO_REPORT] Enviando reporte diario para ${yDateStr}...`);
+      await window.sendTelegramSalesReport('daily', true, true);
+    }
+
+    // B. Reporte Semanal (Solo Lunes)
+    // 0 = Domingo, 1 = Lunes, etc.
+    const dayOfWeek = now.getDay();
+    if (dayOfWeek === 1) {
+      const mondayThisWeek = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek + 1);
+      const lastMonday = new Date(mondayThisWeek.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const lastSunday = new Date(lastMonday.getTime() + 6 * 24 * 60 * 60 * 1000);
+      const lmStr = getBogotaDateStr(lastMonday);
+      const lsStr = getBogotaDateStr(lastSunday);
+      const weeklyId = `weekly_${lmStr}_${lsStr}`;
+      const localSentWeekly = localStorage.getItem(`telegram_report_sent_v1_${weeklyId}`) === 'true';
+
+      if (!localSentWeekly && !sentSet.has(weeklyId)) {
+        console.log(`[AUTO_REPORT] Enviando reporte semanal para la semana ${lmStr} al ${lsStr}...`);
+        await window.sendTelegramSalesReport('weekly', true, true);
+      }
+    }
+
+    // C. Reporte Mensual (Solo día 1)
+    const bogotaTodayStr = getBogotaDateStr(now);
+    const dayOfMonth = parseInt(bogotaTodayStr.split('-')[2]);
+    if (dayOfMonth === 1) {
+      const startThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const lastMonth = new Date(startThisMonth.getFullYear(), startThisMonth.getMonth() - 1, 1);
+      const year = lastMonth.getFullYear();
+      const month = (lastMonth.getMonth() + 1).toString().padStart(2, '0');
+      const monthlyId = `monthly_${year}_${month}`;
+      const localSentMonthly = localStorage.getItem(`telegram_report_sent_v1_${monthlyId}`) === 'true';
+
+      if (!localSentMonthly && !sentSet.has(monthlyId)) {
+        console.log(`[AUTO_REPORT] Enviando reporte mensual para el mes ${year}-${month}...`);
+        await window.sendTelegramSalesReport('monthly', true, true);
+      }
+    }
+  } catch(e) {
+    console.error("[AUTO_REPORT] Error en comprobador de reportes:", e);
+  } finally {
+    state.runningAutoReports = false;
   }
 };
 
@@ -4897,14 +5984,17 @@ window.saveQuickSale = async (e) => {
     if (itemErr) throw itemErr;
 
     // 4. Registrar Producto Pendiente
-    const { error: pendingErr } = await supabase.from('pending_products').insert({
+    const pendingPayload = {
       name,
       photo_url: photoUrl,
       created_by: state.user.id,
       sale_id: sale.id,
       quantity,
       price
-    });
+    };
+    const genderVal = formData.get('gender');
+    if (genderVal) pendingPayload.gender = genderVal;
+    const { error: pendingErr } = await supabase.from('pending_products').insert(pendingPayload);
 
     if (pendingErr) throw pendingErr;
     
@@ -5371,9 +6461,10 @@ window.saveNewProduct = async (e) => {
     }
 
     // 1. Crear el producto (Stock inicial siempre 0 para trazabilidad vía movement)
-    const { data: prod, error: pErr } = await supabase.from('products').insert({
-      name, price, cost, stock: 0, business_id: busId, created_by: state.user.id
-    }).select().single();
+    const productPayload = { name, price, cost, stock: 0, business_id: busId, created_by: state.user.id };
+    const genderVal = formData.get('gender');
+    if (genderVal) productPayload.gender = genderVal;
+    const { data: prod, error: pErr } = await supabase.from('products').insert(productPayload).select().single();
 
     if (pErr) throw pErr;
 
@@ -5503,6 +6594,9 @@ window.saveRateModal = async (e) => {
     await window.updateUserHourlyRate(state.editingRateUser.id, rate);
     state.activeModal = null;
     state.editingRateUser = null;
+    const shiftsList = document.getElementById('shifts-list');
+    if (shiftsList) shiftsList.innerHTML = '<div class="col-span-full text-center py-4"><i class="fas fa-spinner fa-spin text-2xl text-blue-500"></i></div>';
+
     render();
   }
 };
@@ -5528,57 +6622,143 @@ window.setupRealtime = () => {
     });
 };
 
+// ============================================================
+// BUSCADOR INTELIGENTE POS — Fuzzy + Multi-word + Ranking
+// ============================================================
+
+// Utilidad: distancia de Levenshtein simplificada (fuzzy)
+window._levenshtein = (a, b) => {
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      const cost = b.charAt(i - 1) === a.charAt(j - 1) ? 0 : 1;
+      matrix[i][j] = Math.min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1, matrix[i - 1][j - 1] + cost);
+    }
+  }
+  return matrix[b.length][a.length];
+};
+
+// Utilidad: resaltar coincidencias en el nombre
+window._highlightMatch = (text, query) => {
+  if (!query || query.trim() === '') return text;
+  const words = query.trim().toLowerCase().split(/\s+/);
+  let result = text;
+  words.forEach(w => {
+    if (w.length < 2) return;
+    const regex = new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+    result = result.replace(regex, '<mark style="background:#fde68a;color:#92400e;border-radius:3px;padding:0 2px;">$1</mark>');
+  });
+  return result;
+};
+
+// Motor de búsqueda inteligente: puntúa y ordena productos
+window._smartSearch = (products, query) => {
+  if (!query || query.trim() === '') return products.map(p => ({ product: p, score: 0, highlighted: p.name }));
+
+  const q = query.trim().toLowerCase();
+  const words = q.split(/\s+/).filter(w => w.length > 0);
+
+  return products.map(p => {
+    const name = p.name.toLowerCase();
+    const barcode = (p.barcode || '').toLowerCase();
+    let score = 0;
+
+    // 1. Coincidencia exacta de nombre completo → máxima prioridad
+    if (name === q) score += 1000;
+    // 2. El nombre EMPIEZA con la búsqueda
+    else if (name.startsWith(q)) score += 500;
+    // 3. El nombre CONTIENE la búsqueda entera
+    else if (name.includes(q)) score += 300;
+
+    // 4. Multi-word: cada palabra que se encuentre en el nombre suma puntos
+    let allWordsMatch = true;
+    words.forEach(w => {
+      if (name.includes(w)) {
+        score += 100;
+        // Bonus si el nombre empieza con esa palabra o una de sus palabras empieza con ella
+        const nameWords = name.split(/\s+/);
+        if (nameWords.some(nw => nw.startsWith(w))) score += 50;
+      } else {
+        allWordsMatch = false;
+        // 5. Fuzzy: si la palabra no se encuentra exacta, probar distancia Levenshtein
+        const nameWords = name.split(/\s+/);
+        const bestDist = Math.min(...nameWords.map(nw => window._levenshtein(w, nw.substring(0, w.length + 2))));
+        const threshold = w.length <= 3 ? 1 : 2; // tolerancia según longitud
+        if (bestDist <= threshold) {
+          score += 40 - (bestDist * 10);
+        }
+      }
+    });
+    if (allWordsMatch && words.length > 1) score += 200; // Bonus si TODAS las palabras coinciden
+
+    // 6. Código de barras
+    if (barcode && barcode.includes(q)) score += 800;
+
+    return {
+      product: p,
+      score,
+      highlighted: window._highlightMatch(p.name, query)
+    };
+  })
+  .filter(r => r.score > 0)
+  .sort((a, b) => b.score - a.score);
+};
+
+// Debounce: esperar 150ms después de la última tecla
+let _posSearchTimer = null;
 window.handlePosSearch = (val) => {
   state.posSearch = val;
-  const list = document.getElementById('pos-products-list');
-  if (list) {
-    list.innerHTML = window.renderPosProducts();
-  }
+  clearTimeout(_posSearchTimer);
+  _posSearchTimer = setTimeout(() => {
+    const grid = document.getElementById('pos-product-grid');
+    if (grid) {
+      grid.innerHTML = window.renderPosProducts();
+    }
+  }, 150);
 };
 
 window.renderPosProducts = () => {
-  const filtered = state.products.filter(p => 
-    p.name.toLowerCase().includes(state.posSearch.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(state.posSearch))
-  );
+  let results = window._smartSearch(state.products, state.posSearch);
   
-  if (filtered.length === 0) return '<p style="grid-column:1/-1; text-align:center; padding:40px; color:var(--text-muted);">Sin resultados</p>';
-  
-  return filtered.map(p => `
-    <div class="card" onclick="window.addToCart(${JSON.stringify(p).replace(/"/g, '&quot;')})" style="padding:10px; cursor:pointer; text-align:center;">
-      ${p.photo_url ? `<img src="${p.photo_url}" style="width:100%; height:80px; object-fit:cover; border-radius:8px; margin-bottom:5px;">` : '<div style="height:80px; background:#f1f5f9; border-radius:8px; display:flex; align-items:center; justify-content:center; margin-bottom:5px;">ðŸ“¦</div>'}
-      <p style="font-size:11px; font-weight:700; margin:0; height:2.4em; overflow:hidden;">${p.name}</p>
-      <p style="font-size:12px; font-weight:800; color:var(--primary); margin:5px 0 0 0;">${formatCurrency(p.price)}</p>
-    </div>
-  `).join('');
-};
-
-window.handlePosSearch = (val) => {
-  state.posSearch = val;
-  const grid = document.getElementById('pos-product-grid');
-  if (grid) {
-    grid.innerHTML = window.renderPosProducts();
+  // Filtro por género (solo para J&M)
+  if (state.posGenderFilter && state.posGenderFilter !== 'all') {
+    results = results.filter(r => r.product.gender === state.posGenderFilter);
   }
-};
-
-window.renderPosProducts = () => {
-  const filtered = state.products.filter(p => 
-    p.name.toLowerCase().includes(state.posSearch.toLowerCase()) ||
-    (p.barcode && p.barcode.includes(state.posSearch))
-  );
   
-  if (filtered.length === 0) return '<p style="grid-column:1/-1; text-align:center; padding:40px; color:var(--text-muted);">No se encontraron productos</p>';
+  if (results.length === 0) {
+    const q = state.posSearch.trim();
+    const genderMsg = state.posGenderFilter !== 'all' ? `<br>Filtro activo: <b>${state.posGenderFilter === 'hombre' ? '👨 Hombre' : state.posGenderFilter === 'mujer' ? '👩 Mujer' : '⚧️ Unisex'}</b>` : '';
+    return `<div style="grid-column:1/-1; text-align:center; padding:50px 20px;">
+      <div style="font-size:40px; margin-bottom:15px;">🔍</div>
+      <p style="font-weight:700; font-size:16px; color:#334155; margin-bottom:8px;">${q ? `No se encontró "${q}"` : 'Sin productos en esta categoría'}</p>
+      <p style="color:#94a3b8; font-size:13px; line-height:1.5;">Intenta con menos letras o revisa la ortografía.${genderMsg}</p>
+    </div>`;
+  }
   
-  return filtered.map(p => `
-    <div class="card" onclick="window.addToCart('${p.id}')" style="cursor:pointer; padding:15px; display:flex; flex-direction:column; justify-content:space-between; transition:transform 0.1s; border:1px solid #e2e8f0;">
+  return results.map(r => {
+    const p = r.product;
+    const stockColor = p.stock <= 0 ? '#ef4444' : p.stock < 5 ? '#f59e0b' : '#10b981';
+    const stockLabel = p.stock <= 0 ? '⚠️ AGOTADO' : `${p.stock} uds`;
+    const isLowStock = p.stock <= 0;
+    const genderBadge = p.gender === 'hombre' ? '<span style="display:inline-block; font-size:8px; background:#dbeafe; color:#1d4ed8; padding:2px 6px; border-radius:5px; font-weight:800; margin-left:4px;">👨 H</span>' : p.gender === 'mujer' ? '<span style="display:inline-block; font-size:8px; background:#fce7f3; color:#be185d; padding:2px 6px; border-radius:5px; font-weight:800; margin-left:4px;">👩 M</span>' : p.gender === 'unisex' ? '<span style="display:inline-block; font-size:8px; background:#ede9fe; color:#6d28d9; padding:2px 6px; border-radius:5px; font-weight:800; margin-left:4px;">⚧️ U</span>' : '';
+    
+    return `
+    <div class="card" onclick="${isLowStock ? '' : `window.addToCart('${p.id}')`}" 
+      style="cursor:${isLowStock ? 'not-allowed' : 'pointer'}; padding:15px; display:flex; flex-direction:column; justify-content:space-between; transition:all 0.15s ease; border:1px solid ${isLowStock ? '#fecaca' : '#e2e8f0'}; ${isLowStock ? 'opacity:0.6;' : ''} position:relative; overflow:hidden;"
+      ${isLowStock ? '' : 'onmouseenter="this.style.transform=\'translateY(-3px)\';this.style.boxShadow=\'0 8px 25px rgba(0,0,0,0.1)\'"  onmouseleave="this.style.transform=\'none\';this.style.boxShadow=\'none\'"'}>
+      ${r.score >= 300 && state.posSearch.trim() ? '<div style="position:absolute; top:0; right:0; background:#10b981; color:white; font-size:8px; font-weight:800; padding:3px 8px; border-radius:0 0 0 8px;">MEJOR RESULTADO</div>' : ''}
       <div>
         <span style="display:inline-block; font-size:9px; font-weight:800; text-transform:uppercase; color:#4f46e5; background:#e0e7ff; padding:3px 8px; border-radius:6px; margin-bottom:8px; border:1px solid #c7d2fe;">🏬 ${p.businesses?.name || 'Sin asignar'}</span>
-        <p style="font-weight:700; font-size:15px; margin-bottom:5px;">${p.name}</p>
-        <p style="color:var(--text-muted); font-size:12px;">Stock: <span style="color:${p.stock < 5 ? 'var(--danger)' : 'var(--success)'}; font-weight:700;">${p.stock}</span></p>
+        <p style="font-weight:700; font-size:15px; margin-bottom:5px; line-height:1.3;">${r.highlighted}${genderBadge}</p>
+        <p style="color:var(--text-muted); font-size:12px;">Stock: <span style="color:${stockColor}; font-weight:700;">${stockLabel}</span></p>
       </div>
       <p style="font-size:18px; font-weight:800; color:var(--primary); margin-top:10px;">${formatCurrency(p.price)}</p>
     </div>
-  `).join('');
+  `}).join('');
 };
 
 const originalRender = render;
@@ -5743,6 +6923,7 @@ window.calculatePayroll = async () => {
         results[emp.id] = {
           hours: totalHours,
           gpsHours: gpsHours,
+          scheduledPay: totalHours * (parseFloat(emp.hourly_rate) || 0),
           pay: gpsHours * (parseFloat(emp.hourly_rate) || 0),
           shiftsCount: empShifts.length
         };
@@ -6479,7 +7660,8 @@ window.registerGeolocation = async (type) => {
 
     const canCheckIn = userShiftsToday.some(s => {
       const sStart = new Date(s.start_time);
-      return now >= sStart;
+      // Permitir marcar entrada hasta 10 minutos antes del turno
+      return now >= new Date(sStart.getTime() - (10 * 60000));
     });
 
     if (!canCheckIn) {
@@ -6565,58 +7747,28 @@ window.registerGeolocation = async (type) => {
       console.warn("[GPS] Fallo comprobación de permisos, intentando de todas formas:", permErr);
     }
 
-    // 🎯 FILTRO DE PRECISIÓN TRIPLE CON FALLBACK Y TIMEOUT ESTRICTO (Eliminación de Ruido GPS)
+    // 🎯 OBTENCIÓN RÁPIDA DE GPS (Lectura Única Instantánea)
     const samples = [];
-    const maxRetries = 6;
-    let attempts = 0;
-    let gotTimeout = false;
+    window.showToast("📡 Obteniendo señal GPS...", "info");
 
-    window.showToast("📡 Estabilizando señal GPS...", "info");
-
-    while (samples.length < 3 && attempts < maxRetries && !gotTimeout) {
+    try {
+      // Intento rápido de alta precisión (máximo 6.5s) permitiendo caché muy reciente
+      const pos = await Promise.race([
+        Geolocation.getCurrentPosition({ enableHighAccuracy: true, maximumAge: 3000, timeout: 6000 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_GPS")), 6500))
+      ]);
+      samples.push(pos.coords);
+    } catch (err) {
+      console.warn("[GPS] Fallo primera lectura, intentando alternativa:", err);
       try {
-        // Envolver en un timeout estricto de JS de 4.5 segundos para evitar colgaduras nativas permanentes
+        // Fallback rápido con menor precisión
         const pos = await Promise.race([
-          Geolocation.getCurrentPosition({ 
-            enableHighAccuracy: true, 
-            maximumAge: 0, 
-            timeout: 4000 
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_GPS")), 4500))
-        ]);
-        
-        const accuracy = pos.coords.accuracy || 10;
-        if (accuracy < 150) {
-          samples.push(pos.coords);
-        } else {
-          console.warn("[GPS] Muestra ignorada por baja precisión:", accuracy);
-        }
-      } catch (err) {
-        console.warn("[GPS] Fallo de lectura temporal:", err);
-        if (err.message === "TIMEOUT_GPS" || err.message?.includes("location disabled") || err.message?.includes("provider")) {
-          gotTimeout = true; // Salir de inmediato si hay un cuelgue o está apagado el GPS
-        }
-      }
-      attempts++;
-      if (samples.length < 3 && !gotTimeout) await new Promise(r => setTimeout(r, 500));
-    }
-
-    // FALLBACK DE SEGURIDAD: Si no pudimos recolectar 3 muestras de alta precisión, pero tenemos al menos una lectura
-    if (samples.length === 0) {
-      window.showToast("🔄 Buscando señal GPS alternativa...", "info");
-      try {
-        // Intentar lectura rápida usando el proveedor de red/Wi-Fi y permitiendo caché
-        const pos = await Promise.race([
-          Geolocation.getCurrentPosition({ 
-            enableHighAccuracy: false, 
-            maximumAge: 15000, 
-            timeout: 4000 
-          }),
+          Geolocation.getCurrentPosition({ enableHighAccuracy: false, maximumAge: 15000, timeout: 4000 }),
           new Promise((_, reject) => setTimeout(() => reject(new Error("TIMEOUT_FALLBACK")), 4500))
         ]);
         samples.push(pos.coords);
-      } catch (err) {
-        console.error("[GPS] Fallo definitivo obteniendo ubicación:", err);
+      } catch (err2) {
+        console.error("[GPS] Fallo definitivo obteniendo ubicación:", err2);
       }
     }
 
@@ -6627,19 +7779,30 @@ window.registerGeolocation = async (type) => {
       return;
     }
 
-    // Calcular Promedio de Coordenadas
-    const avgLat = samples.reduce((s, c) => s + c.latitude, 0) / samples.length;
-    const avgLng = samples.reduce((s, c) => s + c.longitude, 0) / samples.length;
-    const avgAcc = samples.reduce((s, c) => s + c.accuracy, 0) / samples.length;
-
     const coords = {
-      lat: avgLat,
-      lng: avgLng,
-      accuracy: avgAcc
+      lat: samples[0].latitude,
+      lng: samples[0].longitude,
+      accuracy: samples[0].accuracy || 10
     };
 
     // 🛡️ VALIDACIÓN DE GEOCERCA INTELIGENTE
-    const biz = state.businesses.find(b => b.id === state.currentBusinessId);
+    let targetBizId = state.currentBusinessId;
+    if (state.user.role !== 'admin') {
+      const now = new Date();
+      const userShiftsToday = (state.shifts || []).filter(s => s.user_id === state.user.id && new Date(s.start_time).toDateString() === now.toDateString());
+      if (userShiftsToday.length > 0) {
+        const currentShift = userShiftsToday.find(s => {
+          const sStart = new Date(s.start_time);
+          const sEnd = new Date(s.end_time);
+          return now >= new Date(sStart.getTime() - (10 * 60000)) && now <= sEnd;
+        }) || userShiftsToday.sort((a,b) => new Date(a.start_time) - new Date(b.start_time))[0];
+        
+        if (currentShift && currentShift.business_id) {
+          targetBizId = currentShift.business_id;
+        }
+      }
+    }
+    const biz = state.businesses.find(b => b.id === targetBizId);
     if (biz) {
       const polyConfig = state.geofencePolygons?.[biz.id];
       let isOutside = false;
@@ -6685,7 +7848,7 @@ window.registerGeolocation = async (type) => {
     
     try {
       const userId = state.user.id;
-      const msgData = JSON.stringify({ text: msg, context: { coords, businessId: state.currentBusinessId } });
+      const msgData = JSON.stringify({ text: msg, context: { coords, businessId: targetBizId } });
       const { error } = await supabase.from('system_logs').insert({ type: 'GEOLOCATION_TRACK', message: msgData, module: 'Asistencia', user_id: userId });
       
       if (error) {
@@ -6701,7 +7864,7 @@ window.registerGeolocation = async (type) => {
 
       // 🟢 LLEGADA: Activar motor de rastreo GPS en tiempo real
       if (type === 'arrival') {
-        const activeBiz = state.businesses.find(b => b.id === state.currentBusinessId);
+        const activeBiz = state.businesses.find(b => b.id === targetBizId);
         if (activeBiz) {
           activeBiz.polygonConfig = state.geofencePolygons?.[activeBiz.id];
           byodService.startTracking(state.user.id, activeBiz);
@@ -6758,8 +7921,78 @@ window.setBusinessLocation = async () => {
     }
 
     const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: true, timeout: 10000 });
-    const { latitude: lat, longitude: lng } = pos.coords;
+    const { latitude: lat, longitude: lng, accuracy } = pos.coords;
     
+    // VALIDACIÓN DE INTEGRIDAD Y PRECISIÓN
+    if (lat === null || lat === undefined || lng === null || lng === undefined) {
+      throw new Error("Coordenadas GPS recibidas son nulas.");
+    }
+    
+    // Validar precisión GPS (alerta si la precisión en metros es muy mala)
+    if (accuracy && accuracy > 30) {
+      window.showToast(`⚠️ Señal GPS débil (precisión: ${Math.round(accuracy)}m). Intenta en exteriores.`, "warning");
+    }
+
+    const getDecimalPlaces = (num) => {
+      const parts = num.toString().split('.');
+      return parts.length > 1 ? parts[1].length : 0;
+    };
+
+    if (getDecimalPlaces(lat) < 4 || getDecimalPlaces(lng) < 4) {
+      window.showToast("⚠️ Ubicación demasiado imprecisa. Confirme el GPS.", "warning");
+      alert("⚠️ Ubicación demasiado imprecisa. Confirme el GPS.");
+    }
+
+    // VALIDACIÓN ADICIONAL: Desviación histórica de 5 km
+    let hasHistoricalDeviation = false;
+    try {
+      const { data: recentLogs } = await supabase
+        .from('system_logs')
+        .select('*')
+        .eq('type', 'GEOLOCATION_TRACK')
+        .order('timestamp', { ascending: false })
+        .limit(100);
+
+      if (recentLogs && recentLogs.length > 0) {
+        let matchingLogs = [];
+        for (const log of recentLogs) {
+          try {
+            const parsed = JSON.parse(log.message);
+            if (parsed?.context?.businessId === state.currentBusinessId && parsed?.context?.coords?.lat) {
+              matchingLogs.push(parsed.context.coords);
+            }
+          } catch (e) {}
+        }
+
+        if (matchingLogs.length > 0) {
+          const lastHistorical = matchingLogs[0];
+          const distToHistorical = window.getDistanceInMeters(lat, lng, lastHistorical.lat, lastHistorical.lng);
+          if (distToHistorical > 5000) { // 5 km
+            hasHistoricalDeviation = true;
+          }
+        }
+      }
+    } catch (logErr) {
+      console.warn("Fallo cargando historial para desvío de 5km:", logErr);
+    }
+
+    if (hasHistoricalDeviation) {
+      const alertMsg = `⚠️ <b>Posible coordenada incorrecta configurada para la sede</b>\n\nSe configuró una nueva ubicación que está a más de 5 km de los registros históricos de asistencia.`;
+      try {
+        await supabase.from('system_logs').insert({
+          type: 'SECURITY_ALERT',
+          module: 'Seguridad',
+          message: JSON.stringify({
+            text: "Posible coordenada incorrecta configurada para la sede.",
+            context: { businessId: state.currentBusinessId, newLat: lat, newLng: lng, alert: alertMsg }
+          })
+        });
+      } catch (insertErr) {
+        console.warn("Fallo guardando alerta de seguridad en BD:", insertErr);
+      }
+      window.showToast("⚠️ Posible coordenada incorrecta configurada para la sede.", "warning");
+    }
+
     const { error } = await supabase
       .from('businesses')
       .update({ lat, lng, geofence_radius_meters: 100 })
@@ -6863,12 +8096,18 @@ window.saveCashClosure = async (e) => {
     sistecredito_amount: window.getCleanNumber(formData.get('sistecredito_amount')),
     daviplata_amount: window.getCleanNumber(formData.get('daviplata_amount')),
     nequi_amount: window.getCleanNumber(formData.get('nequi_amount')),
+    bonos_amount: window.getCleanNumber(formData.get('bonos_amount')),
     other_expenses_amount: window.getCleanNumber(formData.get('other_expenses_amount')),
     other_expenses_description: formData.get('other_expenses_description') || '',
     savings_amount: window.getCleanNumber(formData.get('savings_amount')),
     savings_description: formData.get('savings_description') || '',
     observations: formData.get('observations') || ''
   };
+
+  const next_day_base_amount = window.getCleanNumber(formData.get('next_day_base_amount'));
+  if (next_day_base_amount > 0) {
+    payload.next_day_base_amount = next_day_base_amount;
+  }
 
   try {
     const { error } = await supabase.from('cash_closures').insert(payload);

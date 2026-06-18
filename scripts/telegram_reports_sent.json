@@ -1,0 +1,47 @@
+{
+  "daily_2026-06-04": {
+    "sent_at": "2026-06-05T18:52:03.709Z",
+    "total_revenue": 520100,
+    "total_expenses": 418200
+  },
+  "daily_2026-06-05": {
+    "sent_at": "2026-06-05T18:46:49.240Z",
+    "total_revenue": 505600,
+    "total_expenses": 60400
+  },
+  "daily_2026-06-06": {
+    "sent_at": "2026-06-07T03:00:10.881Z",
+    "total_revenue": 1430500,
+    "total_expenses": 464300
+  },
+  "daily_2026-06-07": {
+    "sent_at": "2026-06-08T03:00:10.083Z",
+    "total_revenue": 2728600,
+    "total_expenses": 347500
+  },
+  "daily_2026-06-09": {
+    "sent_at": "2026-06-10T03:00:10.152Z",
+    "total_revenue": 1392800,
+    "total_expenses": 222100
+  },
+  "daily_2026-06-14": {
+    "sent_at": "2026-06-15T03:00:11.532Z",
+    "total_revenue": 3518300,
+    "total_expenses": 371500
+  },
+  "daily_2026-06-15": {
+    "sent_at": "2026-06-16T03:00:10.002Z",
+    "total_revenue": 3214600,
+    "total_expenses": 55000
+  },
+  "daily_2026-06-16": {
+    "sent_at": "2026-06-17T03:00:09.987Z",
+    "total_revenue": 2194000,
+    "total_expenses": 414700
+  },
+  "daily_2026-06-17": {
+    "sent_at": "2026-06-18T03:00:09.913Z",
+    "total_revenue": 2871300,
+    "total_expenses": 110500
+  }
+}

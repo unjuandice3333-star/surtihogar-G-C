@@ -9,7 +9,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "start": "node scripts/server.js"
   },
   "devDependencies": {
     "@testing-library/dom": "^10.4.1",
@@ -29,7 +30,9 @@
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.104.1",
     "dotenv": "^17.4.2",
+    "express": "^4.21.1",
     "jspdf": "^4.2.1",
-    "jspdf-autotable": "^5.0.7"
+    "jspdf-autotable": "^5.0.7",
+    "node-cron": "^3.0.3"
   }
 }

@@ -1,0 +1,132 @@
+=== EJECUCION DE REPORTE DIARIO 05/06/2026 13:46:44,60 === 
+◇ injected env (2) from .env // tip: ⌘ multiple files { path: ['.env.local', '.env'] }
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-05
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:12524) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 22 ventas y 1 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram exitosamente!
+📝 Registro local actualizado.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 05/06/2026 22:00:01,52 === 
+◇ injected env (2) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-05
+ℹ️ El reporte para la fecha 2026-06-05 ya fue enviado previamente. Saltando.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 06/06/2026 22:00:02,33 === 
+◇ injected env (2) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-06
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:16808) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 71 ventas y 4 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram (Chat ID: 6736325362) exitosamente!
+❌ Error de la API de Telegram para chat 8676279926: {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: chat not found'
+}
+📝 Registro local actualizado.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 07/06/2026 22:00:02,33 === 
+◇ injected env (2) from .env // tip: ⌘ override existing { override: true }
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-07
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:3188) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 164 ventas y 2 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram (Chat ID: 6736325362) exitosamente!
+❌ Error de la API de Telegram para chat 8676279926: {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: chat not found'
+}
+📝 Registro local actualizado.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 09/06/2026 22:00:02,10 === 
+◇ injected env (2) from .env // tip: ⌘ enable debugging { debug: true }
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-09
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:30236) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 60 ventas y 6 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram (Chat ID: 6736325362) exitosamente!
+✅ Reporte enviado a Telegram (Chat ID: 8676279926) exitosamente!
+📝 Registro local actualizado.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 14/06/2026 22:00:02,64 === 
+◇ injected env (2) from .env // tip: ⌘ enable debugging { debug: true }
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-14
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:4072) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 37 ventas y 2 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram (Chat ID: 6736325362) exitosamente!
+✅ Reporte enviado a Telegram (Chat ID: 8676279926) exitosamente!
+📝 Registro local actualizado.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 15/06/2026 22:00:02,52 === 
+◇ injected env (2) from .env // tip: ⌘ custom filepath { path: '/custom/path/.env' }
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-15
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:28168) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 98 ventas y 2 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram (Chat ID: 6736325362) exitosamente!
+✅ Reporte enviado a Telegram (Chat ID: 8676279926) exitosamente!
+📝 Registro local actualizado.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 16/06/2026 22:00:02,48 === 
+◇ injected env (2) from .env // tip: ⌘ override existing { override: true }
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-16
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:31848) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 45 ventas y 4 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram (Chat ID: 6736325362) exitosamente!
+✅ Reporte enviado a Telegram (Chat ID: 8676279926) exitosamente!
+📝 Registro local actualizado.
+================================================= 
+=== EJECUCION DE REPORTE DIARIO 17/06/2026 22:00:02,47 === 
+◇ injected env (2) from .env // tip: ◈ encrypted .env [www.dotenvx.com]
+⏳ Iniciando generación de reporte para la fecha (Bogotá): 2026-06-17
+📡 Cargando credenciales de Telegram desde system_logs...
+(node:35052) Warning: Setting the NODE_TLS_REJECT_UNAUTHORIZED environment variable to '0' makes TLS connections and HTTPS requests insecure by disabling certificate verification.
+(Use `node --trace-warnings ...` to show where the warning was created)
+📡 Consultando base de datos Supabase...
+📊 Generando PDF para 69 ventas y 6 egresos...
+Of the table content, 13 units width could not fit page
+Of the table content, 13 units width could not fit page
+📤 Enviando documento PDF a Telegram...
+✅ Reporte enviado a Telegram (Chat ID: 6736325362) exitosamente!
+✅ Reporte enviado a Telegram (Chat ID: 8676279926) exitosamente!
+📝 Registro local actualizado.
+================================================= 
