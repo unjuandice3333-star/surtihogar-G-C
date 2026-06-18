@@ -22,7 +22,7 @@ const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 // Configuración de Telegram cargada de Supabase de forma dinámica
 let botToken = '';
-let adminChatId = '';
+let adminChatIds = [];
 
 async function loadTelegramConfig() {
   try {
@@ -36,9 +36,8 @@ async function loadTelegramConfig() {
     if (configs && configs.length > 0) {
       const config = JSON.parse(configs[0].message);
       botToken = config.botToken;
-      // adminChatId puede ser una lista separada por comas, tomamos el primero para alertas
-      adminChatId = config.chatId ? config.chatId.split(',')[0].trim() : '';
-      console.log(`📡 Configuración de Telegram cargada: Token disponible, Admin Chat ID: ${adminChatId}`);
+      adminChatIds = config.chatId ? config.chatId.split(',').map(id => id.trim()).filter(Boolean) : [];
+      console.log(`📡 Configuración de Telegram cargada: Token disponible, Admin Chat IDs: ${adminChatIds.join(', ')}`);
     }
   } catch (e) {
     console.error("⚠️ Error cargando la configuración de Telegram de Supabase:", e);
@@ -46,7 +45,7 @@ async function loadTelegramConfig() {
 
   // Fallback si no está en base de datos
   if (!botToken) botToken = '8037545998:AAH4zgAxhoNbZ1WKJXmCElwq7oHzi7IJ1LY';
-  if (!adminChatId) adminChatId = '6736325362';
+  if (adminChatIds.length === 0) adminChatIds = ['6736325362', '8676279926'];
 }
 
 // Estados de conversación para el registro de usuarios
@@ -330,7 +329,9 @@ async function handleMessage(message) {
       ]
     };
 
-    await sendTelegramMessage(adminChatId, adminMsg, replyMarkup);
+    for (const adminId of adminChatIds) {
+      await sendTelegramMessage(adminId, adminMsg, replyMarkup);
+    }
     await sendTelegramMessage(chatId, `📨 He enviado tu solicitud de cambio al administrador para el día <b>${requestedDate}</b> (Cambio a: *${labelShift}*). Te avisaré en cuanto lo apruebe.`);
 
   } else if (parsed.type === 'swap_employee') {
@@ -387,7 +388,9 @@ async function handleMessage(message) {
       ]
     };
 
-    await sendTelegramMessage(adminChatId, adminMsg, replyMarkup);
+    for (const adminId of adminChatIds) {
+      await sendTelegramMessage(adminId, adminMsg, replyMarkup);
+    }
     await sendTelegramMessage(chatId, `📨 He enviado tu solicitud al administrador para intercambiar turno con <b>${targetUser.name}</b> el día <b>${requestedDate}</b>. Te avisaré la respuesta.`);
   }
 }
@@ -397,6 +400,12 @@ async function handleCallbackQuery(callbackQuery) {
   const messageId = callbackQuery.message.message_id;
   const data = callbackQuery.data;
   const adminId = callbackQuery.message.chat.id;
+
+  // Filtro de seguridad: Solo permitir clics de administradores autorizados
+  if (!adminChatIds.includes(adminId.toString())) {
+    console.warn(`⚠️ Intento de acción no autorizada de chat ID: ${adminId}`);
+    return;
+  }
 
   if (!data.startsWith('app_') && !data.startsWith('rej_')) return;
 
@@ -597,7 +606,7 @@ async function startBot() {
 export {
   loadTelegramConfig,
   botToken,
-  adminChatId,
+  adminChatIds,
   handleMessage,
   handleCallbackQuery,
   sendTelegramMessage,
