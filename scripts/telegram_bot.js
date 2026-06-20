@@ -107,6 +107,26 @@ async function editTelegramMessage(chatId, messageId, text, replyMarkup = null) 
   }
 }
 
+async function answerCallbackQuery(callbackQueryId, text = null, showAlert = false) {
+  try {
+    const url = `https://api.telegram.org/bot${botToken}/answerCallbackQuery`;
+    const payload = {
+      callback_query_id: callbackQueryId
+    };
+    if (text) {
+      payload.text = text;
+      payload.show_alert = showAlert;
+    }
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    console.error("❌ Error respondiendo callback query:", e);
+  }
+}
+
 // Consumo de Gemini API en crudo
 async function parseRequestWithAI(messageText) {
   if (!geminiApiKey) {
@@ -130,7 +150,9 @@ Y devuelve EXACTAMENTE un objeto JSON con la siguiente estructura (sin formato d
 {
   "type": "change_hours" | "swap_employee" | "unknown",
   "date": "YYYY-MM-DD", // Fecha en la que se solicita el cambio, calculada a partir de la fecha de hoy.
-  "requested_shift": "morning" | "afternoon" | "full" | "off" | null, // mañana (morning, 8:00 a 14:00), tarde (afternoon, 14:00 a 21:00), completo (full, 8:30 a 20:30 o consolidado), libre/descanso (off) o null si no se especifica.
+  "requested_shift": "morning" | "afternoon" | "full" | "off" | "custom" | null, // mañana (morning, 8:00 a 14:00), tarde (afternoon, 14:00 a 21:00), completo (full, 8:30 a 20:30 o consolidado), libre/descanso (off), personalizado (custom si indican horas específicas como 'de 9am a 4pm') o null.
+  "custom_start_time": "HH:MM" | null, // Si es 'custom' y especifican hora de entrada (ej: "09:00", "13:30"), de lo contrario null. Convertir formato 12h (am/pm) a 24h.
+  "custom_end_time": "HH:MM" | null,   // Si es 'custom' y especifican hora de salida (ej: "17:00", "18:30"), de lo contrario null. Convertir formato 12h (am/pm) a 24h.
   "target_employee_name": "string" | null, // Nombre del empleado con el que se quiere cambiar/intercambiar (si se menciona).
   "reason": "string" | null // Razón de la solicitud si se menciona.
 }
@@ -287,13 +309,47 @@ async function handleMessage(message) {
   if (parsed.type === 'change_hours') {
     // Caso 1: Cambio de horas / turno
     let labelShift = '';
-    if (parsed.requested_shift === 'morning') labelShift = 'Mañana (8:00 AM - 2:00 PM)';
-    else if (parsed.requested_shift === 'afternoon') labelShift = 'Tarde (2:00 PM - 9:00 PM)';
-    else if (parsed.requested_shift === 'full') labelShift = 'Completo (8:30 AM - 8:30 PM)';
-    else if (parsed.requested_shift === 'off') labelShift = 'Descanso / Libre';
-    else {
-      await sendTelegramMessage(chatId, "⚠️ Por favor especifica a qué horario deseas cambiar (mañana, tarde, completo o descanso).");
+    let startHr = 8, startMin = 0, endHr = 21, endMin = 0;
+
+    if (parsed.requested_shift === 'custom' && parsed.custom_start_time && parsed.custom_end_time) {
+      const startParts = parsed.custom_start_time.split(':');
+      const endParts = parsed.custom_end_time.split(':');
+      startHr = parseInt(startParts[0]);
+      startMin = parseInt(startParts[1] || '0');
+      endHr = parseInt(endParts[0]);
+      endMin = parseInt(endParts[1] || '0');
+      labelShift = `Personalizado (${parsed.custom_start_time} - ${parsed.custom_end_time})`;
+    } else if (parsed.requested_shift === 'morning') {
+      labelShift = 'Mañana (8:00 AM - 2:00 PM)';
+      startHr = 8; startMin = 0; endHr = 14; endMin = 0;
+    } else if (parsed.requested_shift === 'afternoon') {
+      labelShift = 'Tarde (2:00 PM - 9:00 PM)';
+      startHr = 14; startMin = 0; endHr = 21; endMin = 0;
+    } else if (parsed.requested_shift === 'full') {
+      labelShift = 'Completo (8:30 AM - 8:30 PM)';
+      startHr = 8; startMin = 30; endHr = 20; endMin = 30;
+    } else if (parsed.requested_shift === 'off') {
+      labelShift = 'Descanso / Libre';
+    } else {
+      await sendTelegramMessage(chatId, "⚠️ Por favor especifica a qué horario deseas cambiar (ej: mañana, tarde, completo, descanso, o un horario específico como '9am a 4pm').");
       return;
+    }
+
+    // Consultar horario actual
+    const { data: currentShifts } = await supabase
+      .from('shifts')
+      .select('start_time, end_time')
+      .eq('user_id', currentUser.id)
+      .gte('start_time', `${requestedDate}T00:00:00`)
+      .lte('start_time', `${requestedDate}T23:59:59`)
+      .limit(1);
+
+    let currentHoursText = 'Ninguno (Descanso)';
+    if (currentShifts && currentShifts.length > 0) {
+      const sh = currentShifts[0];
+      const startD = new Date(sh.start_time);
+      const endD = new Date(sh.end_time);
+      currentHoursText = `${startD.toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})} - ${endD.toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})}`;
     }
 
     // Insertar solicitud en base de datos
@@ -305,6 +361,8 @@ async function handleMessage(message) {
         date: requestedDate,
         details: {
           requested_shift: parsed.requested_shift,
+          custom_start_time: parsed.custom_start_time || null,
+          custom_end_time: parsed.custom_end_time || null,
           label: labelShift
         }
       })
@@ -319,7 +377,7 @@ async function handleMessage(message) {
     const reqId = requestRecord[0].id;
 
     // Enviar alerta al Admin
-    const adminMsg = `🔔 <b>SOLICITUD DE CAMBIO DE TURNO</b>\n\n👤 <b>Empleado:</b> ${currentUser.name}\n📅 <b>Fecha:</b> ${requestedDate}\n🔄 <b>Solicita:</b> Cambiar horario a: <b>${labelShift}</b>\n\n¿Deseas aprobar esta solicitud?`;
+    const adminMsg = `🔔 <b>SOLICITUD DE CAMBIO DE HORARIO</b>\n\n👤 <b>Empleado:</b> ${currentUser.name}\n📅 <b>Fecha:</b> ${requestedDate}\n🕒 <b>Horario actual:</b> ${currentHoursText}\n🔄 <b>Solicita cambiar a:</b> <b>${labelShift}</b>\n\n¿Deseas aprobar esta solicitud?`;
     const replyMarkup = {
       inline_keyboard: [
         [
@@ -355,6 +413,54 @@ async function handleMessage(message) {
 
     const targetUser = matches[0];
 
+    // Consultar horarios actuales de ambos en la BD para dar contexto al administrador
+    const { data: shiftReq } = await supabase
+      .from('shifts')
+      .select('*')
+      .eq('user_id', currentUser.id)
+      .gte('start_time', `${requestedDate}T00:00:00`)
+      .lte('start_time', `${requestedDate}T23:59:59`)
+      .limit(1);
+
+    const { data: shiftTarget } = await supabase
+      .from('shifts')
+      .select('*')
+      .eq('user_id', targetUser.id)
+      .gte('start_time', `${requestedDate}T00:00:00`)
+      .lte('start_time', `${requestedDate}T23:59:59`)
+      .limit(1);
+
+    const sReq = shiftReq && shiftReq.length > 0 ? shiftReq[0] : null;
+    const sTarget = shiftTarget && shiftTarget.length > 0 ? shiftTarget[0] : null;
+
+    let detailMsg = '';
+    let reqDetails = {
+      target_user_id: targetUser.id,
+      target_user_name: targetUser.name
+    };
+
+    if (sReq && sTarget) {
+      const timeReq = `${new Date(sReq.start_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})} - ${new Date(sReq.end_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})}`;
+      const timeTarget = `${new Date(sTarget.start_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})} - ${new Date(sTarget.end_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})}`;
+      
+      detailMsg = `• <b>${currentUser.name}</b> trabaja en el horario de ${targetUser.name}: <b>${timeTarget}</b>\n• <b>${targetUser.name}</b> trabaja en el horario de ${currentUser.name}: <b>${timeReq}</b>`;
+      reqDetails.has_both_shifts = true;
+      reqDetails.time_req = timeReq;
+      reqDetails.time_target = timeTarget;
+    } else if (sReq) {
+      const timeReq = `${new Date(sReq.start_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})} - ${new Date(sReq.end_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})}`;
+      detailMsg = `• <b>${targetUser.name}</b> reemplaza a ${currentUser.name} en su turno de <b>${timeReq}</b> (Andrea descansará).`;
+      reqDetails.has_req_shift_only = true;
+      reqDetails.time_req = timeReq;
+    } else if (sTarget) {
+      const timeTarget = `${new Date(sTarget.start_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})} - ${new Date(sTarget.end_time).toLocaleTimeString('es-CO', {hour: '2-digit', minute:'2-digit', hour12: true})}`;
+      detailMsg = `• <b>${currentUser.name}</b> reemplaza a ${targetUser.name} en su turno de <b>${timeTarget}</b> (Nubia descansará).`;
+      reqDetails.has_target_shift_only = true;
+      reqDetails.time_target = timeTarget;
+    } else {
+      detailMsg = `⚠️ Ninguno tiene turnos registrados para ese día aún.`;
+    }
+
     // Registrar solicitud
     const { data: requestRecord, error: insErr } = await supabase
       .from('shift_requests')
@@ -362,10 +468,7 @@ async function handleMessage(message) {
         requester_id: currentUser.id,
         type: 'swap_employee',
         date: requestedDate,
-        details: {
-          target_user_id: targetUser.id,
-          target_user_name: targetUser.name
-        }
+        details: reqDetails
       })
       .select();
 
@@ -378,7 +481,7 @@ async function handleMessage(message) {
     const reqId = requestRecord[0].id;
 
     // Enviar alerta al Admin
-    const adminMsg = `🔔 <b>SOLICITUD DE INTERCAMBIO DE TURNO</b>\n\n👤 <b>Solicitante:</b> ${currentUser.name}\n👥 <b>Intercambia con:</b> ${targetUser.name}\n📅 <b>Fecha:</b> ${requestedDate}\n\n¿Deseas aprobar este intercambio?`;
+    const adminMsg = `🔔 <b>SOLICITUD DE INTERCAMBIO/REEMPLAZO</b>\n\n📅 <b>Fecha:</b> ${requestedDate}\n\n${detailMsg}\n\n¿Deseas aprobar esta solicitud?`;
     const replyMarkup = {
       inline_keyboard: [
         [
@@ -404,8 +507,12 @@ async function handleCallbackQuery(callbackQuery) {
   // Filtro de seguridad: Solo permitir clics de administradores autorizados
   if (!adminChatIds.includes(adminId.toString())) {
     console.warn(`⚠️ Intento de acción no autorizada de chat ID: ${adminId}`);
+    await answerCallbackQuery(callbackQuery.id, "⚠️ No estás autorizado como administrador para esta acción.", true);
     return;
   }
+
+  // Detener el spinner de carga en Telegram inmediatamente
+  await answerCallbackQuery(callbackQuery.id);
 
   if (!data.startsWith('app_') && !data.startsWith('rej_')) return;
 
@@ -460,7 +567,14 @@ async function handleCallbackQuery(callbackQuery) {
       } else {
         // Determinar horas
         let startHr = 8, startMin = 0, endHr = 21, endMin = 0;
-        if (shiftType === 'morning') {
+        if (shiftType === 'custom' && request.details.custom_start_time && request.details.custom_end_time) {
+          const startParts = request.details.custom_start_time.split(':');
+          const endParts = request.details.custom_end_time.split(':');
+          startHr = parseInt(startParts[0]);
+          startMin = parseInt(startParts[1] || '0');
+          endHr = parseInt(endParts[0]);
+          endMin = parseInt(endParts[1] || '0');
+        } else if (shiftType === 'morning') {
           startHr = 8;
           endHr = 14;
         } else if (shiftType === 'afternoon') {
