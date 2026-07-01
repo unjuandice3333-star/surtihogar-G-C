@@ -8,6 +8,7 @@ import {
   startBot 
 } from './telegram_bot.js';
 import { runDailyReport } from './send_daily_report.js';
+import { runMonthlyReport } from './send_monthly_report.js';
 
 const app = express();
 app.use(express.json());
@@ -44,6 +45,26 @@ cron.schedule('0 22 * * *', async () => {
     console.log("✅ [Cron] Reporte diario generado y enviado con éxito.");
   } catch (err) {
     console.error("❌ [Cron] Error ejecutando reporte diario automático:", err);
+  }
+}, {
+  scheduled: true,
+  timezone: "America/Bogota"
+});
+
+// Programar chequeo a las 11:30 PM para el reporte mensual automático (Último día del mes)
+cron.schedule('30 23 * * *', async () => {
+  const now = new Date();
+  // Sumar 1 día en hora de Bogotá
+  const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  
+  if (tomorrow.getDate() === 1) {
+    console.log("⏰ [Cron] Último día del mes detectado. Iniciando reporte mensual de rendimiento (11:30 PM Bogotá)...");
+    try {
+      await runMonthlyReport();
+      console.log("✅ [Cron] Reporte mensual de rendimiento enviado con éxito.");
+    } catch (err) {
+      console.error("❌ [Cron] Error ejecutando reporte mensual automático:", err);
+    }
   }
 }, {
   scheduled: true,
