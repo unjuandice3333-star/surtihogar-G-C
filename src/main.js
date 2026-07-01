@@ -1668,17 +1668,26 @@ const render = () => {
             </div>
             <div style="display:flex; flex-direction:column; gap:12px;">
               ${(() => {
+                const getBogotaDateStr = (d) => {
+                  const formatter = new Intl.DateTimeFormat('en-CA', {
+                    timeZone: 'America/Bogota',
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit'
+                  });
+                  return formatter.format(new Date(d));
+                };
+
                 const period = state.collabSalesPeriod || 'month';
-                const now = new Date();
-                const todayStr = now.toISOString().split('T')[0];
-
-                // Calcular inicio de semana (Domingo)
-                const startOfWeek = new Date();
-                startOfWeek.setDate(now.getDate() - now.getDay());
-                const startOfWeekStr = startOfWeek.toISOString().split('T')[0];
-
+                const todayStr = getBogotaDateStr(new Date());
                 const currentMonthStr = todayStr.substring(0, 7);
                 const currentYearStr = todayStr.substring(0, 4);
+
+                // Calcular inicio de semana (Domingo) en hora local de Bogotá
+                const nowLocal = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Bogota' }));
+                const startOfWeek = new Date(nowLocal);
+                startOfWeek.setDate(nowLocal.getDate() - nowLocal.getDay());
+                const startOfWeekStr = getBogotaDateStr(startOfWeek);
 
                 const ventaCatId = state.categories.find(c => c.name === 'Venta' && c.type === 'income')?.id;
 
@@ -1687,14 +1696,16 @@ const render = () => {
                   const isSale = t.type === 'income' && (t.category_id === ventaCatId || t.description?.includes('Venta POS'));
                   if (!isSale) return false;
 
+                  const txDateStr = getBogotaDateStr(t.date);
+
                   if (period === 'today') {
-                    return t.date === todayStr;
+                    return txDateStr === todayStr;
                   } else if (period === 'week') {
-                    return t.date >= startOfWeekStr;
+                    return txDateStr >= startOfWeekStr && txDateStr <= todayStr;
                   } else if (period === 'month') {
-                    return t.date.startsWith(currentMonthStr);
+                    return txDateStr.startsWith(currentMonthStr);
                   } else if (period === 'year') {
-                    return t.date.startsWith(currentYearStr);
+                    return txDateStr.startsWith(currentYearStr);
                   }
                   return true; // 'all'
                 });

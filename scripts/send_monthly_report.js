@@ -31,14 +31,14 @@ const formatCurrency = (val) => {
   }).format(val);
 };
 
-// Obtener límites del mes en UTC-5
+// Obtener límites del mes en UTC
 const getMonthlyLimits = (monthStr) => {
   // monthStr: YYYY-MM
   const [year, month] = monthStr.split('-').map(Number);
   const endLocal = new Date(year, month, 0); // Último día
   
-  const startMs = new Date(`${year}-${String(month).padStart(2,'0')}-01T00:00:00-05:00`).getTime();
-  const endMs = new Date(`${year}-${String(month).padStart(2,'0')}-${String(endLocal.getDate()).padStart(2,'0')}T23:59:59-05:00`).getTime();
+  const startMs = new Date(`${year}-${String(month).padStart(2,'0')}-01T00:00:00Z`).getTime();
+  const endMs = new Date(`${year}-${String(month).padStart(2,'0')}-${String(endLocal.getDate()).padStart(2,'0')}T23:59:59Z`).getTime();
   
   return { startMs, endMs, lastDay: endLocal.getDate() };
 };

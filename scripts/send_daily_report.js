@@ -83,9 +83,9 @@ async function main() {
       process.exit(0);
     }
 
-    // 2. Definir límites del día en UTC-5 (Bogotá)
-    const startMs = new Date(targetDateStr + 'T00:00:00-05:00').getTime();
-    const endMs = new Date(targetDateStr + 'T23:59:59-05:00').getTime();
+    // 2. Definir límites del día en UTC (para coincidir con las cuentas de base de datos)
+    const startMs = new Date(targetDateStr + 'T00:00:00Z').getTime();
+    const endMs = new Date(targetDateStr + 'T23:59:59Z').getTime();
 
     // 3. Consultar configuración de Telegram
     console.log("📡 Cargando credenciales de Telegram desde system_logs...");
