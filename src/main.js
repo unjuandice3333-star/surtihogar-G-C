@@ -1330,12 +1330,14 @@ const render = () => {
   }
 
   else if (state.view === 'pos') {
+    const activeBiz = state.businesses.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
+    const activeBizId = state.activeShiftBusinessId || state.currentBusinessId;
     const filteredProducts = state.products.filter(p => 
+      (activeBizId === 'all' || p.business_id === activeBizId) &&
       p.name.toLowerCase().includes(state.posSearch.toLowerCase())
     );
     const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
-    const activeBiz = state.businesses.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
     const isBaratillo = false; // El Baratillo ahora usa la funcionalidad de inventario/POS completa
     const isJM = activeBiz && (activeBiz.name.toLowerCase().includes('j&m') || activeBiz.name.toLowerCase().includes('j & m'));
 
