@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3000;
 
 // Endpoint de salud para pings / mantener activo el bot gratis
 app.get('/', (req, res) => {
-  res.send('🤖 Surtihogar Telegram Bot & Scheduler is active!');
+  res.send('🤖 J&M Telegram Bot & Scheduler is active!');
 });
 
 // Endpoint de Webhook para Telegram (recibe mensajes y clics instantáneos)

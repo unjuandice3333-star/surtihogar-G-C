@@ -1206,7 +1206,7 @@ const render = () => {
           <div style="background: #f8fafc; border-radius: 12px; padding: 15px; text-align: left; font-size: 13px; color: #475569; margin-bottom: 24px; border: 1px solid #e2e8f0; line-height: 1.5;">
             💡 <b>¿Cómo solucionarlo?</b><br>
             1. Ve a <a href="https://supabase.com/dashboard" target="_blank" style="color: var(--primary); font-weight: 700; text-decoration: underline;">Supabase Dashboard</a> e inicia sesión.<br>
-            2. Selecciona tu proyecto <b>Surtihogar</b>.<br>
+            2. Selecciona tu proyecto <b>J&M</b>.<br>
             3. Haz clic en el botón <b>"Restore Project"</b> (Restaurar) y espera un par de minutos.<br>
             4. Una vez restaurado, toca el botón de abajo para reintentar.
           </div>
@@ -1276,7 +1276,7 @@ const render = () => {
             <img src="logo_v3.png" alt="Logo">
           </div>
           <div class="header-title">
-            <h1 style="font-size:28px;">Surtihogar G&C</h1>
+            <h1 style="font-size:28px;">J&M</h1>
           </div>
         </div>
         <form onsubmit="window.handleLogin(event)" class="card">
@@ -1503,7 +1503,7 @@ const render = () => {
           </div>
           <div class="header-title">
             <p class="role-tag">GERENCIA</p>
-            <h1>${state.currentBusinessId === 'all' ? 'Panel Global G&C' : (state.businesses.find(b => b.id === state.currentBusinessId)?.name || 'Surtihogar G&C')}</h1>
+            <h1>${state.currentBusinessId === 'all' ? 'Panel Global J&M' : (state.businesses.find(b => b.id === state.currentBusinessId)?.name || 'J&M')}</h1>
           </div>
         </div>
         <div class="header-actions">
@@ -2560,7 +2560,7 @@ const render = () => {
                             <p style="font-size:11px; color:var(--text-muted); margin-top:2px; display:flex; align-items:center; gap:4px;"><i data-lucide="phone" style="width:10px;"></i> ${s.phone || 'Sin número'}</p>
                           </div>
                           ${s.phone ? `
-                            <a href="https://wa.me/57${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent('Hola ' + s.name + ', te saludamos desde Surtihogar G&C. Nos gustaría coordinar un pedido de mercancía para nuestro inventario. ¿Nos podrías confirmar disponibilidad? Quedamos atentos. ¡Muchas gracias!')}" target="_blank" style="background:#22c55e; color:white; padding:5px 10px; border-radius:20px; font-size:10px; font-weight:800; display:inline-flex; align-items:center; gap:4px; text-decoration:none; box-shadow:0 4px 6px -1px rgba(34,197,94,0.3); transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+                            <a href="https://wa.me/57${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent('Hola ' + s.name + ', te saludamos desde J&M. Nos gustaría coordinar un pedido de mercancía para nuestro inventario. ¿Nos podrías confirmar disponibilidad? Quedamos atentos. ¡Muchas gracias!')}" target="_blank" style="background:#22c55e; color:white; padding:5px 10px; border-radius:20px; font-size:10px; font-weight:800; display:inline-flex; align-items:center; gap:4px; text-decoration:none; box-shadow:0 4px 6px -1px rgba(34,197,94,0.3); transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
                               <i data-lucide="message-circle" style="width:12px; height:12px;"></i> PEDIR
                             </a>
                           ` : ''}
@@ -2602,7 +2602,7 @@ const render = () => {
                       <p style="font-size:13px; color:var(--text-muted); margin-top:6px; display:flex; align-items:center; gap:6px;"><i data-lucide="phone" style="width:12px; height:12px;"></i> ${s.phone || 'Sin teléfono'}</p>
                     </div>
                     ${s.phone ? `
-                      <a href="https://wa.me/57${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent('Hola ' + s.name + ', te saludamos desde Surtihogar G&C. Nos gustaría coordinar un pedido de mercancía para nuestro inventario. ¿Nos podrías confirmar disponibilidad? Quedamos atentos. ¡Muchas gracias!')}" target="_blank" style="background:#22c55e; color:white; padding:8px 14px; border-radius:25px; font-size:11px; font-weight:850; display:inline-flex; align-items:center; gap:6px; text-decoration:none; box-shadow:0 4px 12px rgba(34,197,94,0.25); flex-shrink:0;">
+                      <a href="https://wa.me/57${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent('Hola ' + s.name + ', te saludamos desde J&M. Nos gustaría coordinar un pedido de mercancía para nuestro inventario. ¿Nos podrías confirmar disponibilidad? Quedamos atentos. ¡Muchas gracias!')}" target="_blank" style="background:#22c55e; color:white; padding:8px 14px; border-radius:25px; font-size:11px; font-weight:850; display:inline-flex; align-items:center; gap:6px; text-decoration:none; box-shadow:0 4px 12px rgba(34,197,94,0.25); flex-shrink:0;">
                         <i data-lucide="message-circle" style="width:14px; height:14px;"></i> PEDIR
                       </a>
                     ` : ''}
@@ -3283,7 +3283,7 @@ const render = () => {
           </div>
           <div class="header-title">
             <p class="role-tag">${state.user?.role === 'admin' ? 'ADMIN' : 'COLABORADOR'}</p>
-            <h1>Surtihogar G&C</h1>
+            <h1>J&M</h1>
           </div>
         </div>
         <div class="header-actions">
@@ -5082,7 +5082,7 @@ window.generateAdminSalesReportPDF = async () => {
 
       body.push([
         `#${sale.id.slice(0, 8).toUpperCase()}\n${dateStr}`,
-        bizNames || 'Surtihogar',
+        bizNames || 'J&M',
         sellerName,
         productsLabel || 'Venta directa en POS',
         payMethod.toUpperCase(),
@@ -5373,7 +5373,7 @@ window.generateAdminSalesReportPDF = async () => {
         });
         
         await Share.share({
-          title: `Auditoría de Ventas Surtihogar`,
+          title: `Auditoría de Ventas J&M`,
           text: `Comparto planilla oficial de auditoría del local ${bizName}.`,
           url: writeResult.uri
         });
@@ -5630,7 +5630,7 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
 
       body.push([
         `#${sale.id.slice(0, 8).toUpperCase()}\n${dateStr}`,
-        bizNames || 'Surtihogar',
+        bizNames || 'J&M',
         sellerName,
         productsLabel || 'Venta directa en POS',
         payMethod.toUpperCase(),
@@ -7064,7 +7064,7 @@ window.initByodMap = () => {
     // 2. Tile Layer (Estilo Moderno y Limpio: CartoDB Voyager)
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
       maxZoom: 19,
-      attribution: 'Surtihogar G&C &copy; CartoDB'
+      attribution: 'J&M &copy; CartoDB'
     }).addTo(map);
 
     const bounds = [];

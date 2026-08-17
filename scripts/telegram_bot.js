@@ -688,7 +688,7 @@ async function handleCallbackQuery(callbackQuery) {
 // Bucle principal de ejecución (Long Polling)
 async function startBot() {
   await loadTelegramConfig();
-  console.log("🤖 Iniciando bucle de Long Polling para el bot de Surtihogar...");
+  console.log("🤖 Iniciando bucle de Long Polling para el bot de J&M...");
 
   let offset = 0;
 

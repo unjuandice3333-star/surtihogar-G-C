@@ -194,7 +194,7 @@ async function main() {
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(16);
     doc.setFont("helvetica", "bold");
-    doc.text(`SURTIHOGAR G&C - REPORTE DIARIO AUTOMÁTICO`, 15, 15);
+    doc.text(`J&M - REPORTE DIARIO AUTOMÁTICO`, 15, 15);
     
     doc.setFontSize(9);
     doc.setFont("helvetica", "normal");
@@ -284,7 +284,7 @@ async function main() {
 
       body.push([
         `#${sale.id.slice(0, 8).toUpperCase()}\n${dateStr}`,
-        bizNames || 'Surtihogar',
+        bizNames || 'J&M',
         sellerName,
         productsLabel || 'Venta directa en POS',
         payMethod.toUpperCase(),
