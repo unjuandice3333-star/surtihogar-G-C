@@ -1336,7 +1336,7 @@ const render = () => {
     const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
 
     const activeBiz = state.businesses.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
-    const isBaratillo = activeBiz && activeBiz.name.toLowerCase().includes('baratillo');
+    const isBaratillo = false; // El Baratillo ahora usa la funcionalidad de inventario/POS completa
     const isJM = activeBiz && (activeBiz.name.toLowerCase().includes('j&m') || activeBiz.name.toLowerCase().includes('j & m'));
 
     html = `
@@ -5176,10 +5176,7 @@ window.generateAdminSalesReportPDF = async () => {
 
     const rectY = finalY > 135 ? 20 : finalY;
 
-    // Si el local es Baratillo, los costos de mercancía no se manejan, forzamos a 0
-    if (bizName.toLowerCase().includes('baratillo')) {
-      totalCost = 0;
-    }
+    // Costos de mercancía calculados dinámicamente según productos vendidos
 
     // Cálculos Avanzados de EBITDA, Flujo de Caja y Utilidad Total
     let totalOpExpenses = 0;
@@ -5284,13 +5281,8 @@ window.generateAdminSalesReportPDF = async () => {
     doc.setFontSize(8.5);
     doc.setTextColor(30, 41, 59);
     
-    if (bizName.toLowerCase().includes('baratillo')) {
-      doc.text(`(-) Costos de Mercancía:`, 160, currentOffsetY + 27);
-      doc.text(`(NO APLICA)`, 240, currentOffsetY + 27);
-    } else {
-      doc.text(`(-) Costos de Mercancía:`, 160, currentOffsetY + 27);
-      doc.text(`(${formatCurrency(totalCost)})`, 240, currentOffsetY + 27);
-    }
+    doc.text(`(-) Costos de Mercancía:`, 160, currentOffsetY + 27);
+    doc.text(`(${formatCurrency(totalCost)})`, 240, currentOffsetY + 27);
 
     doc.setDrawColor(226, 232, 240);
     doc.line(160, currentOffsetY + 30, 277, currentOffsetY + 30);
@@ -5337,7 +5329,7 @@ window.generateAdminSalesReportPDF = async () => {
       });
     }
 
-    if (topProducts.length > 0 && !bizName.toLowerCase().includes('baratillo')) {
+    if (topProducts.length > 0) {
       currentOffsetY += 2;
       doc.setFont("helvetica", "bold");
       doc.setFontSize(8);
