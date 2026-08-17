@@ -528,9 +528,9 @@ window.fetchData = async () => {
 
   } catch (e) { 
     console.error("Error Crítico en fetchData:", e);
+    state.view = 'connection_error';
     window.showToast('⚠️ Error de conexión: ' + e.message, 'danger');
   } finally { 
-    if (state.view === 'loading') state.view = 'app';
     state.loading = false; 
     if (window.render) window.render(); else render(); 
   }
@@ -1191,6 +1191,32 @@ window.showShiftReport = (timeframe = 'daily') => {
 const render = () => {
   const app = document.getElementById('app');
   if (state.loading && state.view === 'loading') { app.innerHTML = '<div style="padding:100px;text-align:center;">Cargando...</div>'; return; }
+  
+  if (state.view === 'connection_error') {
+    app.innerHTML = `
+      <div class="container" style="padding: 40px; text-align: center; max-width: 500px; margin: 80px auto;">
+        <div class="card" style="border: 1px solid rgba(239, 68, 68, 0.2); box-shadow: 0 10px 25px rgba(239, 68, 68, 0.05); padding: 30px; border-radius: 16px;">
+          <div style="background: rgba(239, 68, 68, 0.1); width: 64px; height: 64px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 20px auto; color: var(--danger);">
+            <i data-lucide="wifi-off" style="width: 32px; height: 32px;"></i>
+          </div>
+          <h2 style="font-size: 20px; font-weight: 800; color: #1e293b; margin-bottom: 12px;">Fallo de Conexión a la Base de Datos</h2>
+          <p style="color: #64748b; font-size: 14px; line-height: 1.6; margin-bottom: 24px;">
+            No se pudo establecer conexión con el servidor. Esto suele ocurrir cuando la base de datos de <b>Supabase se pausa automáticamente por inactividad</b> (después de 7 días sin uso).
+          </p>
+          <div style="background: #f8fafc; border-radius: 12px; padding: 15px; text-align: left; font-size: 13px; color: #475569; margin-bottom: 24px; border: 1px solid #e2e8f0; line-height: 1.5;">
+            💡 <b>¿Cómo solucionarlo?</b><br>
+            1. Ve a <a href="https://supabase.com/dashboard" target="_blank" style="color: var(--primary); font-weight: 700; text-decoration: underline;">Supabase Dashboard</a> e inicia sesión.<br>
+            2. Selecciona tu proyecto <b>Surtihogar</b>.<br>
+            3. Haz clic en el botón <b>"Restore Project"</b> (Restaurar) y espera un par de minutos.<br>
+            4. Una vez restaurado, toca el botón de abajo para reintentar.
+          </div>
+          <button onclick="window.fetchData()" class="btn-primary" style="width: 100%; padding: 12px; border-radius: 12px; font-weight: 700;">🔄 Reintentar Conexión</button>
+        </div>
+      </div>
+    `;
+    if (window.lucide) window.lucide.createIcons();
+    return;
+  }
 
   const getSystemSalesForClosure = (bizId, dateStr, closureObj = null) => {
     let startTime = null;
