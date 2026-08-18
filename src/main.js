@@ -498,6 +498,15 @@ window.fetchData = async () => {
     }
     state.products = prodData;
 
+    // 7.5 Carga de la Lista de Compras
+    try {
+      const { data: shopData } = await supabase.from('shopping_list').select('*, users(name), businesses(name)').order('created_at', { ascending: false });
+      state.shoppingList = shopData || [];
+    } catch (e) {
+      console.warn("Aviso cargando lista de compras:", e);
+      state.shoppingList = [];
+    }
+
     // --- INICIO AUTOSANACIÓN DE LA BD ---
     if (state.user?.role === 'admin' && state.sales && state.transactions) {
       setTimeout(async () => {
@@ -3338,6 +3347,7 @@ const render = () => {
             </button>
           ` : ''}
           <button onclick="window.openPos()" class="btn-primary" style="padding:15px; background:var(--secondary);">+ VENTA (POS)</button>
+          <button onclick="state.activeModal='shopping_list';render()" class="btn-primary" style="padding:15px; background:#8b5cf6;">📋 POR TRAER</button>
           ${(state.user?.role === 'admin' || state.user?.is_cashier) ? `
             <button onclick="window.openModal('expense')" class="btn-primary" style="padding:15px;">+ GASTO</button>
           ` : ''}
@@ -3710,6 +3720,128 @@ const render = () => {
           </form>
         </div>
       </div>`;
+    })() : ''}
+
+    ${state.activeModal === 'shopping_list' ? (() => {
+      const pendingItems = (state.shoppingList || []).filter(item => item.status === 'pending');
+      const completedItems = (state.shoppingList || []).filter(item => item.status === 'completed');
+      
+      return `
+      <div class="modal-overlay">
+        <div class="modal-card card" style="max-width:500px; max-height:85vh; display:flex; flex-direction:column; overflow:hidden;">
+          <div class="modal-close" onclick="state.activeModal=null;render()"><i data-lucide="x"></i></div>
+          
+          <div style="padding:10px 0 15px 0; border-bottom:1px solid #e2e8f0;">
+            <h2 style="display:flex; align-items:center; gap:8px; margin:0;"><i data-lucide="shopping-cart" style="color:var(--primary);"></i> Lista de Compras</h2>
+            <p style="font-size:12px; color:var(--text-muted); margin:5px 0 0 0;">Registra los productos que hacen falta traer para los locales.</p>
+          </div>
+
+          <!-- FORMULARIO PARA AGREGAR ITEM -->
+          <form onsubmit="window.saveShoppingItem(event)" style="padding:15px 0; border-bottom:1px solid #e2e8f0; display:grid; grid-template-columns: 2fr 1fr; gap:10px; align-items:end;">
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:11px; font-weight:700;">Producto / Artículo</label>
+              <input type="text" name="name" class="form-input" placeholder="Ej: Jabón de loza, Ganchos..." required style="height:38px; font-size:13px;">
+            </div>
+            <div class="form-group" style="margin:0;">
+              <label style="font-size:11px; font-weight:700;">Cant.</label>
+              <input type="number" name="quantity" class="form-input" value="1" min="1" required style="height:38px; font-size:13px;">
+            </div>
+            
+            <div class="form-group" style="margin:0; grid-column: span 2;">
+              <label style="font-size:11px; font-weight:700;">Local Destino</label>
+              <select name="business_id" class="form-input" required style="height:38px; font-size:13px;">
+                ${state.businesses
+                  .filter(b => !['Mi Primer Negocio', 'Mi Negocio Principal', 'Billar', 'Local ropa', 'Droguería', 'Restaurante'].includes(b.name))
+                  .map(b => `<option value="${b.id}" ${state.activeShiftBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+              </select>
+            </div>
+            
+            <button type="submit" class="btn-primary" style="grid-column: span 2; height:38px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:6px; background:var(--success);">
+              <i data-lucide="plus-circle" style="width:16px;"></i> AGREGAR A LA LISTA
+            </button>
+          </form>
+
+          <!-- LISTADO DE ITEMS -->
+          <div style="flex:1; overflow-y:auto; padding:15px 0;">
+            
+            <!-- Pendientes -->
+            <h3 style="font-size:12px; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
+              📌 Pendientes (${pendingItems.length})
+            </h3>
+            
+            ${pendingItems.length === 0 ? `
+              <p style="font-size:12px; color:var(--text-muted); font-style:italic; padding:10px 0 20px 0; text-align:center;">No hay productos pendientes por comprar.</p>
+            ` : `
+              <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:20px;">
+                ${pendingItems.map(item => {
+                  const isUserAdmin = state.user?.role === 'admin';
+                  const bizName = item.businesses?.name || 'General';
+                  const userName = item.users?.name || 'Usuario';
+                  return `
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px;">
+                      <div style="display:flex; align-items:center; gap:10px;">
+                        ${isUserAdmin ? `
+                          <input type="checkbox" onchange="window.toggleShoppingItemStatus('${item.id}', 'completed')" style="width:16px; height:16px; cursor:pointer;" title="Marcar como comprado">
+                        ` : `
+                          <span style="font-size:14px; opacity:0.6;">⏳</span>
+                        `}
+                        <div>
+                          <p style="font-weight:700; font-size:13px; margin:0; color:#1e293b;">${item.name} <span style="background:var(--primary); color:white; font-size:10px; font-weight:800; padding:2px 6px; border-radius:6px;">x${item.quantity}</span></p>
+                          <p style="font-size:10px; color:var(--text-muted); margin:2px 0 0 0;">📍 Sede: <b>${bizName}</b> | Registró: <b>${userName}</b></p>
+                        </div>
+                      </div>
+                      ${isUserAdmin ? `
+                        <button onclick="window.deleteShoppingItem('${item.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:4px;" title="Eliminar de la lista">
+                          <i data-lucide="trash-2" style="width:16px;"></i>
+                        </button>
+                      ` : ''}
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            `}
+
+            <!-- Comprados / Completados -->
+            ${completedItems.length > 0 ? `
+              <h3 style="font-size:12px; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-top:20px; margin-bottom:10px;">
+                ✓ Comprados (${completedItems.length})
+              </h3>
+              <div style="display:flex; flex-direction:column; gap:8px; opacity:0.7;">
+                ${completedItems.map(item => {
+                  const isUserAdmin = state.user?.role === 'admin';
+                  const bizName = item.businesses?.name || 'General';
+                  return `
+                    <div style="display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:10px;">
+                      <div style="display:flex; align-items:center; gap:10px;">
+                        ${isUserAdmin ? `
+                          <input type="checkbox" checked onchange="window.toggleShoppingItemStatus('${item.id}', 'pending')" style="width:16px; height:16px; cursor:pointer;" title="Desmarcar">
+                        ` : `
+                          <span style="font-size:14px; color:#10b981;">✓</span>
+                        `}
+                        <div>
+                          <p style="font-weight:600; font-size:13px; margin:0; text-decoration:line-through; color:var(--text-muted);">${item.name} <span>x${item.quantity}</span></p>
+                          <p style="font-size:10px; color:var(--text-muted); margin:2px 0 0 0;">📍 Sede: ${bizName}</p>
+                        </div>
+                      </div>
+                      ${isUserAdmin ? `
+                        <button onclick="window.deleteShoppingItem('${item.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:4px;" title="Eliminar">
+                          <i data-lucide="trash-2" style="width:16px;"></i>
+                        </button>
+                      ` : ''}
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            ` : ''}
+
+          </div>
+
+          <div style="padding:15px 0 0 0; border-top:1px solid #e2e8f0; text-align:right;">
+            <button onclick="state.activeModal=null;render()" class="btn-primary" style="background:#64748b; padding:8px 20px; font-size:12px;">CERRAR</button>
+          </div>
+        </div>
+      </div>
+      `;
     })() : ''}
     ${state.activeModal === 'edit_rate' ? `
     <div class="modal-overlay">
@@ -6456,6 +6588,79 @@ window.fillFromPending = (id) => {
   if (nameInput) nameInput.value = pending.name;
   if (priceInput) priceInput.value = pending.price;
   window.updateMarginCalc();
+};
+
+window.saveShoppingItem = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  const orig = btn.innerHTML;
+  try {
+    btn.disabled = true;
+    btn.innerHTML = '<span class="loading-spinner"></span> AGREGANDO...';
+    
+    const formData = new FormData(e.target);
+    const name = formData.get('name');
+    const quantity = parseInt(formData.get('quantity'), 10) || 1;
+    const businessId = formData.get('business_id');
+    
+    const { error } = await supabase.from('shopping_list').insert({
+      name,
+      quantity,
+      business_id: businessId,
+      created_by: state.user.id,
+      status: 'pending'
+    });
+    
+    if (error) throw error;
+    
+    window.showToast("✅ Agregado a la lista de compras", "success");
+    e.target.reset();
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error: " + err.message, "danger");
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+  }
+};
+
+window.toggleShoppingItemStatus = async (id, newStatus) => {
+  try {
+    const { error } = await supabase
+      .from('shopping_list')
+      .update({ status: newStatus })
+      .eq('id', id);
+      
+    if (error) throw error;
+    
+    window.showToast(newStatus === 'completed' ? "✓ Producto comprado" : "📌 Producto marcado como pendiente", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error al actualizar estado: " + err.message, "danger");
+  }
+};
+
+window.deleteShoppingItem = async (id) => {
+  if (!confirm("¿Seguro que deseas eliminar este producto de la lista?")) return;
+  try {
+    const { error } = await supabase
+      .from('shopping_list')
+      .delete()
+      .eq('id', id);
+      
+    if (error) throw error;
+    
+    window.showToast("🗑️ Producto eliminado de la lista", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error al eliminar: " + err.message, "danger");
+  }
 };
 
 window.toggleNewSupplierField = (val) => {
