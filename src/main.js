@@ -3552,6 +3552,22 @@ const render = () => {
             </div>
           </div>
           <div class="form-group">
+            <label style="font-weight: 700; display: block; margin-bottom: 5px;">Forma de Pago</label>
+            <select name="payment_method" class="form-input" required style="width:100%; height:40px; padding:5px 10px; border-radius:10px; font-size:13px; font-weight:700; background:white; border:1px solid #cbd5e1;">
+              <option value="Efectivo">💵 Efectivo</option>
+              <option value="Addi">💳 Addi</option>
+              <option value="Sistecredito">💳 Sistecredito</option>
+              <option value="Bonos Coopchipaque">🎟️ Bonos Coopchipaque</option>
+              ${(() => {
+                const activeBus = state.businesses?.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
+                return activeBus?.name?.toLowerCase().includes('baratillo')
+                  ? `<option value="Daviplata">📱 Daviplata</option>`
+                  : `<option value="Transferencia">🏦 Transferencia</option>`;
+              })()}
+              <option value="Llano Gas">🔥 Llano Gas</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label>Foto</label>
             <input type="file" name="photo" class="form-input" accept="image/*" capture="environment" style="padding:10px;">
           </div>
@@ -5982,6 +5998,8 @@ window.saveQuickSale = async (e) => {
     const photoFile = formData.get('photo');
     const total = price * quantity;
 
+    const paymentMethod = formData.get('payment_method') || 'Efectivo';
+
     // BLOQUEO DE SEGURIDAD: Venta Rápida (Excluye Admin)
     const isAdmin = state.user?.role === 'admin';
     if (!isAdmin && state.user?.role !== 'admin' && !state.activeShiftBusinessId) {
@@ -5999,7 +6017,8 @@ window.saveQuickSale = async (e) => {
     const { data: sale, error: saleErr } = await supabase.from('sales').insert({
       user_id: state.user.id,
       total: total,
-      note: `Venta informal: ${name}`
+      note: `Venta informal: ${name}`,
+      payment_method: paymentMethod
     }).select().single();
 
     if (saleErr) throw saleErr;
@@ -6042,7 +6061,8 @@ window.saveQuickSale = async (e) => {
         business_id: saleBusId,
         user_id: state.user.id,
         date: new Date().toISOString(),
-        description: `Venta Rápida: ${name}`
+        description: `Venta Rápida: ${name}`,
+        payment_method: paymentMethod
       });
       if (trxErr) console.error("Error balance venta rápida:", trxErr);
     }
@@ -6411,8 +6431,8 @@ window.saveNewBusiness = async (e) => {
 };
 
 window.updateMarginCalc = () => {
-  const price = parseFloat(document.getElementById('new-prod-price')?.value) || 0;
-  const cost = parseFloat(document.getElementById('new-prod-cost')?.value) || 0;
+  const price = window.getCleanNumber(document.getElementById('new-prod-price')?.value);
+  const cost = window.getCleanNumber(document.getElementById('new-prod-cost')?.value);
   const badge = document.getElementById('margin-badge');
   if (!badge) return;
 
