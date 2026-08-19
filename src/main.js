@@ -2427,7 +2427,8 @@ const render = () => {
           </div>
         </div>
         <div class="header-actions">
-          <button onclick="state.activeModal='new_product';render()" class="btn-primary" style="padding:8px 15px; font-size:12px;">+ NUEVO PRODUCTO</button>
+          <button onclick="window.syncAllIdealStocksToCurrent()" class="btn-primary" style="padding:8px 15px; font-size:12px; background:#0284c7; border:none;" title="Copia el stock actual al stock fijo/ideal para todos los productos">🔄 FIJAR STOCK ACTUAL</button>
+          <button onclick="state.activeModal='new_product';render()" class="btn-primary" style="padding:8px 15px; font-size:12px; margin-left:10px;">+ NUEVO PRODUCTO</button>
           <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px; margin-left:10px;">VOLVER</button>
         </div>
       </header>
@@ -3887,6 +3888,30 @@ const render = () => {
               <i data-lucide="plus-circle" style="width:16px;"></i> AGREGAR A LA LISTA
             </button>
           </form>
+
+          <!-- SECCIÓN: RELLENAR POR VENTAS EN UN RANGO DE FECHAS -->
+          <div style="padding: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; margin-top: 10px; margin-bottom: 10px;">
+            <p style="font-size: 11px; font-weight: 800; color: #166534; text-transform: uppercase; margin-top: 0; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+              📊 Rellenar por Ventas (Por Rango de Fechas)
+            </p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+              <div class="form-group" style="margin: 0;">
+                <label style="font-size: 10px; font-weight: 700; margin-bottom: 4px; color:#166534;">Fecha Inicio</label>
+                <input type="date" id="replenish-start-date" class="form-input" style="height: 32px; font-size: 12px; padding: 4px 8px; border-color:#bbf7d0;" value="${(() => {
+                  const d = new Date();
+                  d.setDate(d.getDate() - 7);
+                  return d.toISOString().split('T')[0];
+                })()}">
+              </div>
+              <div class="form-group" style="margin: 0;">
+                <label style="font-size: 10px; font-weight: 700; margin-bottom: 4px; color:#166534;">Fecha Fin</label>
+                <input type="date" id="replenish-end-date" class="form-input" style="height: 32px; font-size: 12px; padding: 4px 8px; border-color:#bbf7d0;" value="${new Date().toISOString().split('T')[0]}">
+              </div>
+            </div>
+            <button type="button" onclick="window.previewAndReplenishSold()" class="btn-primary" style="width: 100%; height: 34px; font-size: 12px; font-weight: 700; background: #16a34a; border: none; display: flex; align-items: center; justify-content: center; gap: 6px;">
+              🔍 CONSULTAR Y AGREGAR VENDIDOS
+            </button>
+          </div>
 
           <!-- LISTADO DE ITEMS -->
           <div style="flex:1; overflow-y:auto; padding:15px 0;">
@@ -6953,6 +6978,155 @@ window.autoReplenishStock = async () => {
   } catch (err) {
     console.error(err);
     window.showToast("⚠️ Error auto-rellenando stock: " + err.message, "danger");
+  }
+};
+
+window.syncAllIdealStocksToCurrent = async () => {
+  if (!confirm("⚠️ ¿Estás seguro de que deseas establecer el Stock Fijo/Ideal de TODOS los productos igual a su Stock Actual?\n\nEsto sobrescribirá tus configuraciones actuales de stock fijo.")) {
+    return;
+  }
+  
+  try {
+    window.showToast("⏳ Actualizando stocks fijos...", "info");
+    
+    // Obtener los productos locales
+    const products = state.products || [];
+    
+    for (const p of products) {
+      const { error } = await supabase
+        .from('products')
+        .update({ purchase_price: p.stock })
+        .eq('id', p.id);
+        
+      if (error) console.error(`Error actualizando ${p.name}:`, error);
+    }
+    
+    window.showToast("✅ Todos los stocks fijos se actualizaron al stock actual", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error: " + err.message, "danger");
+  }
+};
+
+window.previewAndReplenishSold = async () => {
+  const startVal = document.getElementById('replenish-start-date')?.value;
+  const endVal = document.getElementById('replenish-end-date')?.value;
+  
+  if (!startVal || !endVal) {
+    alert("Por favor selecciona ambas fechas.");
+    return;
+  }
+  
+  const start = new Date(startVal + 'T00:00:00');
+  const end = new Date(endVal + 'T23:59:59');
+  
+  try {
+    window.showToast("⏳ Consultando ventas...", "info");
+    
+    // 1. Obtener todas las ventas creadas en el rango de fechas
+    const { data: sales, error: sErr } = await supabase
+      .from('sales')
+      .select('id, created_at')
+      .gte('created_at', start.toISOString())
+      .lte('created_at', end.toISOString());
+      
+    if (sErr) throw sErr;
+    
+    if (!sales || sales.length === 0) {
+      alert(`No se registraron ventas en el rango desde el ${start.toLocaleDateString()} hasta el ${end.toLocaleDateString()}.`);
+      return;
+    }
+    
+    const saleIds = sales.map(s => s.id);
+    
+    // 2. Obtener todos los items vendidos
+    const { data: items, error: iErr } = await supabase
+      .from('sale_items')
+      .select('product_id, quantity, price')
+      .in('sale_id', saleIds);
+      
+    if (iErr) throw iErr;
+    
+    if (!items || items.length === 0) {
+      alert("No se encontraron artículos vendidos en las ventas de este período.");
+      return;
+    }
+    
+    // 3. Agrupar por product_id y sumar cantidad sold
+    const soldTotals = {};
+    items.forEach(item => {
+      if (!item.product_id) return; // Omitir ventas rápidas sin producto asociado
+      if (!soldTotals[item.product_id]) {
+        soldTotals[item.product_id] = 0;
+      }
+      soldTotals[item.product_id] += (item.quantity || 0);
+    });
+    
+    const productIds = Object.keys(soldTotals);
+    if (productIds.length === 0) {
+      alert("No hay productos con registro oficial vendidos en este período.");
+      return;
+    }
+    
+    // 4. Buscar nombres de productos para mostrar en el diálogo
+    const { data: prods, error: pErr } = await supabase
+      .from('products')
+      .select('id, name, business_id')
+      .in('id', productIds);
+      
+    if (pErr) throw pErr;
+    
+    // 5. Preparar la confirmación con el listado
+    const listDescription = prods.map(p => {
+      const qty = soldTotals[p.id];
+      const bizName = state.businesses.find(b => b.id === p.business_id)?.name || 'General';
+      return `• ${p.name} (Sede: ${bizName}) -> Cantidad vendida: ${qty}`;
+    }).join('\n');
+    
+    if (!confirm(`Se encontraron ${prods.length} productos vendidos entre el ${start.toLocaleDateString()} y el ${end.toLocaleDateString()}:\n\n${listDescription}\n\n¿Deseas agregar estos artículos faltantes a la lista de compras semanal?`)) {
+      return;
+    }
+    
+    // 6. Insertar en la lista de compras
+    const itemsToInsert = [];
+    
+    for (const p of prods) {
+      const qty = soldTotals[p.id];
+      
+      // Evitar duplicar si ya existe el pendiente idéntico
+      const alreadyListed = (state.shoppingList || []).some(item => 
+        item.status === 'pending' && 
+        item.business_id === p.business_id && 
+        item.name.toLowerCase().includes(p.name.toLowerCase())
+      );
+      
+      if (!alreadyListed) {
+        itemsToInsert.push({
+          name: `${p.name} (Reponer ventas)`,
+          quantity: qty,
+          business_id: p.business_id,
+          created_by: state.user.id,
+          status: 'pending'
+        });
+      }
+    }
+    
+    if (itemsToInsert.length === 0) {
+      window.showToast("✅ Los artículos ya estaban agregados en la lista de compras.", "success");
+      return;
+    }
+    
+    const { error: insErr } = await supabase.from('shopping_list').insert(itemsToInsert);
+    if (insErr) throw insErr;
+    
+    window.showToast(`✅ Se agregaron ${itemsToInsert.length} artículos a la lista de compras`, "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error: " + err.message, "danger");
   }
 };
 
