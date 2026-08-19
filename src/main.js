@@ -2373,6 +2373,30 @@ const render = () => {
       </header>
 
       <div class="container">
+        <!-- Barra de Filtros y Búsqueda de Inventario -->
+        <div class="card" style="margin-bottom: 15px; padding: 15px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; justify-content: space-between; background: #f8fafc; border: 1px solid #e2e8f0;">
+          <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center; flex: 1; width: 100%;">
+            
+            <!-- Selector de Sede -->
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 220px; flex: 1;">
+              <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">📍 Filtrar por Sede</label>
+              <select onchange="state.selectedInventoryBusinessId = this.value; window.render()" class="form-control" style="padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 13px; background: white; cursor: pointer;">
+                <option value="all" ${(state.selectedInventoryBusinessId || 'all') === 'all' ? 'selected' : ''}>Mostrar todas las Sedes</option>
+                ${state.businesses.map(b => `
+                  <option value="${b.id}" ${(state.selectedInventoryBusinessId || 'all') === b.id ? 'selected' : ''}>${b.name}</option>
+                `).join('')}
+              </select>
+            </div>
+
+            <!-- Entrada de Búsqueda -->
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 250px; flex: 2;">
+              <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">🔍 Buscar Producto por Nombre</label>
+              <input type="text" placeholder="Escribe para buscar..." value="${state.inventorySearchQuery || ''}" oninput="state.inventorySearchQuery = this.value; window.render()" style="padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 13px; width: 100%;">
+            </div>
+
+          </div>
+        </div>
+
         <div class="card" style="padding:0; overflow:hidden;">
           <table style="width:100%; border-collapse:collapse; font-size:13px;">
             <thead style="background:#f8fafc; color:var(--text-muted);">
@@ -2386,22 +2410,35 @@ const render = () => {
               </tr>
             </thead>
             <tbody>
-              ${state.products.sort((a,b) => a.name.localeCompare(b.name)).map(p => {
-                const genderBadge = p.gender === 'hombre' ? '<span style="font-size:9px; background:#dbeafe; color:#1d4ed8; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👨 H</span>' : p.gender === 'mujer' ? '<span style="font-size:9px; background:#fce7f3; color:#be185d; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👩 M</span>' : p.gender === 'unisex' ? '<span style="font-size:9px; background:#ede9fe; color:#6d28d9; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">⚧️ U</span>' : '';
-                return `
-                <tr style="border-bottom:1px solid #f1f5f9;">
-                  <td style="padding:15px; font-weight:600;">${p.name}${genderBadge}</td>
-                  <td style="padding:15px;">${formatCurrency(p.price)}</td>
-                  <td style="padding:15px; color:var(--text-muted);">${formatCurrency(p.cost || 0)}</td>
-                  <td style="padding:15px;"><span style="background:${p.stock < 5 ? '#fee2e2' : '#f0f9ff'}; color:${p.stock < 5 ? '#b91c1c' : '#0369a1'}; padding:4px 10px; border-radius:10px; font-weight:700;">${p.stock}</span></td>
-                  <td style="padding:15px; font-size:11px; color:var(--primary); font-weight:600;">👤 ${state.employees.find(e => e.id === p.created_by)?.name || 'Admin'}</td>
-                  <td style="padding:15px; text-align:center;">
-                    <button onclick="window.deleteProduct('${p.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center;" title="Eliminar Producto">
-                      <i data-lucide="trash-2" style="width:16px; height:16px;"></i>
-                    </button>
-                  </td>
-                </tr>
-              `}).join('')}
+              ${state.products
+                .filter(p => {
+                  const activeFilter = state.selectedInventoryBusinessId || 'all';
+                  if (activeFilter !== 'all' && p.business_id !== activeFilter) return false;
+                  if (state.inventorySearchQuery) {
+                    const q = state.inventorySearchQuery.toLowerCase();
+                    return p.name.toLowerCase().includes(q);
+                  }
+                  return true;
+                })
+                .sort((a,b) => a.name.localeCompare(b.name))
+                .map(p => {
+                  const genderBadge = p.gender === 'hombre' ? '<span style="font-size:9px; background:#dbeafe; color:#1d4ed8; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👨 H</span>' : p.gender === 'mujer' ? '<span style="font-size:9px; background:#fce7f3; color:#be185d; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👩 M</span>' : p.gender === 'unisex' ? '<span style="font-size:9px; background:#ede9fe; color:#6d28d9; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">⚧️ U</span>' : '';
+                  const bizName = state.businesses.find(b => b.id === p.business_id)?.name || 'General';
+                  const bizBadge = `<span style="font-size:9px; background:#e2e8f0; color:#475569; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">📍 ${bizName}</span>`;
+                  return `
+                  <tr style="border-bottom:1px solid #f1f5f9;">
+                    <td style="padding:15px; font-weight:600;">${p.name}${genderBadge}${bizBadge}</td>
+                    <td style="padding:15px;">${formatCurrency(p.price)}</td>
+                    <td style="padding:15px; color:var(--text-muted);">${formatCurrency(p.cost || 0)}</td>
+                    <td style="padding:15px;"><span style="background:${p.stock < 5 ? '#fee2e2' : '#f0f9ff'}; color:${p.stock < 5 ? '#b91c1c' : '#0369a1'}; padding:4px 10px; border-radius:10px; font-weight:700;">${p.stock}</span></td>
+                    <td style="padding:15px; font-size:11px; color:var(--primary); font-weight:600;">👤 ${state.employees.find(e => e.id === p.created_by)?.name || 'Admin'}</td>
+                    <td style="padding:15px; text-align:center;">
+                      <button onclick="window.deleteProduct('${p.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center;" title="Eliminar Producto">
+                        <i data-lucide="trash-2" style="width:16px; height:16px;"></i>
+                      </button>
+                    </td>
+                  </tr>
+                `}).join('')}
             </tbody>
           </table>
         </div>
