@@ -7023,28 +7023,39 @@ window._smartSearch = (products, query) => {
   if (!query || query.trim() === '') return products.map(p => ({ product: p, score: 0, highlighted: p.name }));
 
   const q = query.trim().toLowerCase();
+  const qClean = q.replace(/[.,]/g, '');
   const words = q.split(/\s+/).filter(w => w.length > 0);
 
   return products.map(p => {
     const name = p.name.toLowerCase();
     const barcode = (p.barcode || '').toLowerCase();
+    const priceStr = String(p.price || '');
     let score = 0;
 
     // 1. Coincidencia exacta de nombre completo → máxima prioridad
     if (name === q) score += 1000;
+    // Coincidencia exacta de precio (limpiando puntos/comas)
+    else if (qClean && !isNaN(qClean) && priceStr === qClean) score += 950;
     // 2. El nombre EMPIEZA con la búsqueda
     else if (name.startsWith(q)) score += 500;
     // 3. El nombre CONTIENE la búsqueda entera
     else if (name.includes(q)) score += 300;
+    // El precio contiene la búsqueda
+    else if (qClean && !isNaN(qClean) && qClean.length >= 3 && priceStr.includes(qClean)) score += 250;
 
-    // 4. Multi-word: cada palabra que se encuentre en el nombre suma puntos
+    // 4. Multi-word: cada palabra que se encuentre en el nombre suma puntos, o si es un número y coincide con el precio
     let allWordsMatch = true;
     words.forEach(w => {
+      const wClean = w.replace(/[.,]/g, '');
+      const isNum = wClean && !isNaN(wClean) && wClean.length >= 3;
+
       if (name.includes(w)) {
         score += 100;
         // Bonus si el nombre empieza con esa palabra o una de sus palabras empieza con ella
         const nameWords = name.split(/\s+/);
         if (nameWords.some(nw => nw.startsWith(w))) score += 50;
+      } else if (isNum && (priceStr === wClean || priceStr.startsWith(wClean))) {
+        score += 150; // Coincidencia de precio parcial/total por palabra
       } else {
         allWordsMatch = false;
         // 5. Fuzzy: si la palabra no se encuentra exacta, probar distancia Levenshtein
