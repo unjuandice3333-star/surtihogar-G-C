@@ -250,6 +250,13 @@ window.fetchData = async () => {
           const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
           nextMonthEnd.setHours(0,0,0,0);
           
+          // Obtener todos los turnos para usarlos en el algoritmo de lookback semanal
+          const { data: allExistingShiftsData } = await supabase
+            .from('shifts')
+            .select('user_id, business_id, start_time, end_time');
+            
+          const allExistingShifts = allExistingShiftsData || [];
+          
           // Obtener el último turno de la BD
           const { data: latestShifts } = await supabase.from('shifts').select('start_time').order('start_time', { ascending: false }).limit(1);
           
@@ -269,18 +276,57 @@ window.fetchData = async () => {
           }
 
           if (currentDate <= nextMonthEnd) {
-            window.showToast("🔄 Generando patrón continuo de turnos...", "info");
+            window.showToast("🔄 Replicando y generando turnos...", "info");
             const shiftsToInsert = [];
             
+            const getShiftsOnDay = (dateObj) => {
+              const dateStr = dateObj.toDateString();
+              return allExistingShifts.filter(s => {
+                const d = new Date(s.start_time);
+                return d.toDateString() === dateStr;
+              });
+            };
+            
             while (currentDate <= nextMonthEnd) {
-              const targetMonday = getMondayOfDate(currentDate);
-              const diffMs = targetMonday.getTime() - anchorMonday.getTime();
-              const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
-              const weekIndex = ((2 + diffWeeks) % 4 + 4) % 4; // Lunes 25 Mayo es Semana 3 (index 2)
+              const sourceDate = new Date(currentDate);
+              sourceDate.setDate(sourceDate.getDate() - 7);
               
-              const day = currentDate.getDay();
-              const dayOfWeek = day === 0 ? 6 : day - 1;
-              const dayConfig = SCHEDULE[weekIndex][dayOfWeek];
+              const sourceShifts = getShiftsOnDay(sourceDate);
+              
+              if (sourceShifts.length > 0) {
+                // Replicar de la semana anterior
+                sourceShifts.forEach(s => {
+                  const origStart = new Date(s.start_time);
+                  const origEnd = new Date(s.end_time);
+                  
+                  const start = new Date(currentDate);
+                  start.setHours(origStart.getHours(), origStart.getMinutes(), 0, 0);
+                  
+                  const end = new Date(currentDate);
+                  const dayDiff = origEnd.getDate() - origStart.getDate();
+                  end.setDate(end.getDate() + dayDiff);
+                  end.setHours(origEnd.getHours(), origEnd.getMinutes(), 0, 0);
+                  
+                  const newShift = {
+                    user_id: s.user_id,
+                    business_id: s.business_id,
+                    start_time: start.toISOString(),
+                    end_time: end.toISOString()
+                  };
+                  
+                  shiftsToInsert.push(newShift);
+                  allExistingShifts.push(newShift); // Agregar en memoria para la siguiente iteración
+                });
+              } else {
+                // Fallback al esquema por defecto anterior
+                const targetMonday = getMondayOfDate(currentDate);
+                const diffMs = targetMonday.getTime() - anchorMonday.getTime();
+                const diffWeeks = Math.round(diffMs / (7 * 24 * 60 * 60 * 1000));
+                const weekIndex = ((2 + diffWeeks) % 4 + 4) % 4;
+                
+                const day = currentDate.getDay();
+                const dayOfWeek = day === 0 ? 6 : day - 1;
+                const dayConfig = SCHEDULE[weekIndex][dayOfWeek];
                 
                 const mEmps = dayConfig.m || [];
                 const tEmps = dayConfig.t || [];
@@ -298,7 +344,7 @@ window.fetchData = async () => {
                   
                   if (inMorning && inAfternoon) {
                     startHr = 8;
-                    endHr = 21; // Turno consolidado
+                    endHr = 21;
                   } else if (inAfternoon) {
                     startHr = 14;
                     endHr = 21;
@@ -306,47 +352,60 @@ window.fetchData = async () => {
                   
                   const start = new Date(currentDate); start.setHours(startHr, 0, 0, 0);
                   const end = new Date(currentDate); end.setHours(endHr, 0, 0, 0);
-                  shiftsToInsert.push({ user_id: userId, business_id: BUSINESS_ID, start_time: start.toISOString(), end_time: end.toISOString() });
+                  
+                  const newShift = {
+                    user_id: userId,
+                    business_id: BUSINESS_ID,
+                    start_time: start.toISOString(),
+                    end_time: end.toISOString()
+                  };
+                  shiftsToInsert.push(newShift);
+                  allExistingShifts.push(newShift);
                 });
 
-              // André (ef4d854e-c6d4-4307-a7ff-18cd167eddde)
-              if (day !== 5 && day !== 6) { // Trabaja Domingo (0) a Jueves (4). Viernes/Sábado descanso.
-                const start = new Date(currentDate);
-                start.setHours(8, 30, 0, 0);
-                const end = new Date(currentDate);
-                end.setHours(20, 30, 0, 0);
-                shiftsToInsert.push({
-                  user_id: 'ef4d854e-c6d4-4307-a7ff-18cd167eddde',
-                  business_id: 'e349c48f-70d8-4832-a322-b6508476dec4',
-                  start_time: start.toISOString(),
-                  end_time: end.toISOString()
-                });
+                // André
+                if (day !== 5 && day !== 6) {
+                  const start = new Date(currentDate);
+                  start.setHours(8, 30, 0, 0);
+                  const end = new Date(currentDate);
+                  end.setHours(20, 30, 0, 0);
+                  const newShift = {
+                    user_id: 'ef4d854e-c6d4-4307-a7ff-18cd167eddde',
+                    business_id: 'e349c48f-70d8-4832-a322-b6508476dec4',
+                    start_time: start.toISOString(),
+                    end_time: end.toISOString()
+                  };
+                  shiftsToInsert.push(newShift);
+                  allExistingShifts.push(newShift);
+                }
+
+                // Andrea Torres
+                if (day !== 4 && day !== 6) {
+                  const start = new Date(currentDate);
+                  start.setHours(10, 0, 0, 0);
+                  const end = new Date(currentDate);
+                  end.setHours(20, 0, 0, 0);
+                  const newShift = {
+                    user_id: '3c076f65-ff17-4116-9303-7758ab0f20a7',
+                    business_id: '9b99027c-7471-4c16-80c2-29e2645312e8',
+                    start_time: start.toISOString(),
+                    end_time: end.toISOString()
+                  };
+                  shiftsToInsert.push(newShift);
+                  allExistingShifts.push(newShift);
+                }
               }
-
-              // Andrea Torres (3c076f65-ff17-4116-9303-7758ab0f20a7)
-              if (day !== 4 && day !== 6) { // Trabaja Domingo (0) a Miércoles (3), y Viernes (5). Jueves/Sábado descanso.
-                const start = new Date(currentDate);
-                start.setHours(10, 0, 0, 0);
-                const end = new Date(currentDate);
-                end.setHours(20, 0, 0, 0);
-                shiftsToInsert.push({
-                  user_id: '3c076f65-ff17-4116-9303-7758ab0f20a7',
-                  business_id: '9b99027c-7471-4c16-80c2-29e2645312e8',
-                  start_time: start.toISOString(),
-                  end_time: end.toISOString()
-                });
-              }
-
+              
               currentDate.setDate(currentDate.getDate() + 1);
             }
-
+            
             if (shiftsToInsert.length > 0) {
               const BATCH_SIZE = 50;
               for (let i = 0; i < shiftsToInsert.length; i += BATCH_SIZE) {
                 const batch = shiftsToInsert.slice(i, i + BATCH_SIZE);
                 await supabase.from('shifts').insert(batch);
               }
-              window.showToast("✅ Turnos generados exitosamente.", "success");
+              window.showToast("✅ Turnos replicados y generados exitosamente.", "success");
               
               // Recargar datos si es necesario para refrescar la UI de inmediato
               if (window.location.hash.includes('manager')) {
@@ -2163,6 +2222,7 @@ const render = () => {
           </div>
         </div>
         <div class="header-actions">
+          <button onclick="window.replicateSelectedWeek()" class="btn-primary" style="padding:8px 15px; font-size:12px; background:#10b981; border:none;">🔄 REPLICAR SEMANA A FUTURO</button>
           <button onclick="state.view='manager_dashboard';window.render()" class="btn-secondary" style="padding:8px 15px; font-size:12px; margin-left:10px;">VOLVER</button>
         </div>
       </header>
@@ -6694,6 +6754,102 @@ window.deleteProduct = async (id) => {
   } catch (err) {
     console.error(err);
     window.showToast("⚠️ " + err.message, "danger");
+  }
+};
+
+window.replicateSelectedWeek = async () => {
+  if (!state.rosterConfig || !state.rosterConfig.startDate) {
+    window.showToast("⚠️ No hay una fecha seleccionada.", "danger");
+    return;
+  }
+  
+  // Encontrar el lunes de la semana seleccionada
+  const selectedDate = new Date(state.rosterConfig.startDate + 'T00:00:00');
+  const day = selectedDate.getDay();
+  const monday = new Date(selectedDate);
+  monday.setDate(selectedDate.getDate() - (day === 0 ? 6 : day - 1));
+  monday.setHours(0, 0, 0, 0);
+  
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  sunday.setHours(23, 59, 59, 999);
+  
+  // Buscar turnos locales en esa semana
+  const currentWeekShifts = (state.shifts || []).filter(s => {
+    const d = new Date(s.start_time);
+    return d >= monday && d <= sunday;
+  });
+  
+  if (currentWeekShifts.length === 0) {
+    alert("No hay turnos registrados en esta semana para replicar.");
+    return;
+  }
+  
+  if (!confirm(`Se copiarán los ${currentWeekShifts.length} turnos de la semana del ${monday.toLocaleDateString()} a las próximas 4 semanas en el futuro.\n\n⚠️ ¡Atención!: Esto eliminará cualquier turno previamente planificado en esas fechas de destino. ¿Deseas continuar?`)) {
+    return;
+  }
+  
+  try {
+    window.showToast("⏳ Replicando turnos...", "info");
+    
+    // Rango de fechas a eliminar y re-crear en las próximas 4 semanas
+    const deleteStart = new Date(monday);
+    deleteStart.setDate(monday.getDate() + 7); // Empieza el lunes siguiente
+    
+    const deleteEnd = new Date(monday);
+    deleteEnd.setDate(monday.getDate() + 7 + 27); // 4 semanas completas
+    deleteEnd.setHours(23, 59, 59, 999);
+    
+    // 1. Eliminar turnos existentes en el rango de destino
+    const { error: delErr } = await supabase
+      .from('shifts')
+      .delete()
+      .gte('start_time', deleteStart.toISOString())
+      .lte('start_time', deleteEnd.toISOString());
+      
+    if (delErr) throw delErr;
+    
+    // 2. Generar turnos clonados para cada una de las 4 semanas
+    const shiftsToInsert = [];
+    
+    for (let w = 1; w <= 4; w++) {
+      const daysOffset = w * 7;
+      
+      currentWeekShifts.forEach(s => {
+        const origStart = new Date(s.start_time);
+        const origEnd = new Date(s.end_time);
+        
+        const start = new Date(origStart);
+        start.setDate(origStart.getDate() + daysOffset);
+        
+        const end = new Date(origEnd);
+        end.setDate(origEnd.getDate() + daysOffset);
+        
+        shiftsToInsert.push({
+          user_id: s.user_id,
+          business_id: s.business_id,
+          start_time: start.toISOString(),
+          end_time: end.toISOString()
+        });
+      });
+    }
+    
+    // 3. Insertar los nuevos turnos en batches
+    if (shiftsToInsert.length > 0) {
+      const BATCH_SIZE = 50;
+      for (let i = 0; i < shiftsToInsert.length; i += BATCH_SIZE) {
+        const batch = shiftsToInsert.slice(i, i + BATCH_SIZE);
+        const { error: insErr } = await supabase.from('shifts').insert(batch);
+        if (insErr) throw insErr;
+      }
+    }
+    
+    window.showToast("✅ Turnos replicados exitosamente para las próximas 4 semanas.", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error replicando turnos: " + err.message, "danger");
   }
 };
 
