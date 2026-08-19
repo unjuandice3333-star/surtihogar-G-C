@@ -120,12 +120,13 @@ async function main() {
     const chatId = (config && config.chatId) ? config.chatId : '6736325362,8676279926';
 
     // 3. Consultar datos
-    const [businessesRes, employeesRes, salesRes, saleItemsRes, productsRes] = await Promise.all([
+    const [businessesRes, employeesRes, salesRes, saleItemsRes, productsRes, pendingProductsRes] = await Promise.all([
       supabase.from('businesses').select('id, name'),
       supabase.from('users').select('*').neq('role', 'admin'),
       supabase.from('sales').select('*').gte('created_at', new Date(startMs).toISOString()).lte('created_at', new Date(endMs).toISOString()),
       supabase.from('sale_items').select('*'),
-      supabase.from('products').select('id, name')
+      supabase.from('products').select('id, name, business_id, cost'),
+      supabase.from('pending_products').select('*')
     ]);
 
     if (salesRes.error) throw salesRes.error;
@@ -135,6 +136,7 @@ async function main() {
     const sales = salesRes.data || [];
     const saleItems = saleItemsRes.data || [];
     const products = productsRes.data || [];
+    const pendingProducts = pendingProductsRes.data || [];
 
     if (sales.length === 0) {
       console.log(`ℹ️ No se registraron ventas en el mes ${periodLabel}. No se genera reporte.`);
@@ -262,6 +264,51 @@ async function main() {
       }
     });
 
+    // Calcular costos mensuales
+    let totalMonthlyCost = 0;
+    sales.forEach(sale => {
+      const items = saleItems.filter(si => si.sale_id === sale.id);
+      items.forEach(i => {
+        const prod = products.find(p => p.id === i.product_id);
+        let pCost = parseFloat(prod?.cost) || 0;
+        if (!prod) {
+          const pending = (pendingProducts || []).find(pp => pp.sale_id === sale.id);
+          if (pending) {
+            pCost = parseFloat(pending.cost) || 0;
+          }
+        }
+        const itemQty = Number(i.quantity) || 1;
+        totalMonthlyCost += (pCost * itemQty);
+      });
+    });
+
+    const totalMonthlyRevenue = sales.reduce((sum, s) => sum + parseFloat(s.total || 0), 0);
+    const totalMonthlyProfit = totalMonthlyRevenue - totalMonthlyCost;
+    const monthlyMargin = totalMonthlyRevenue > 0 ? (totalMonthlyProfit / totalMonthlyRevenue) * 100 : 0;
+
+    // Pintar cuadro de rentabilidad mensual al pie de la primera página
+    const finalYVal = doc.lastAutoTable ? doc.lastAutoTable.finalY : 120;
+    const summaryY = finalYVal + 10;
+    if (summaryY <= 175) {
+      doc.setFillColor(241, 245, 249);
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(15, summaryY, 267, 22, 'FD');
+
+      doc.setTextColor(15, 23, 42);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9.5);
+      doc.text("RESUMEN DE RENTABILIDAD MENSUAL (CONSOLIDADO)", 20, summaryY + 6);
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.text(`• Total Ventas del Mes: ${formatCurrency(totalMonthlyRevenue)}`, 20, summaryY + 14);
+      doc.text(`• Costo de Mercancía Vendida (CMV): ${formatCurrency(totalMonthlyCost)}`, 110, summaryY + 14);
+      
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(21, 128, 61);
+      doc.text(`• Ganancia Real (Utilidad Bruta): ${formatCurrency(totalMonthlyProfit)} (${monthlyMargin.toFixed(1)}% de Margen)`, 195, summaryY + 14);
+    }
+
     // PÁGINAS INDIVIDUALES DE DESGLOSE DE AUDITORÍA
     ranking.forEach(emp => {
       doc.addPage();
@@ -342,7 +389,7 @@ async function main() {
       try {
         const formData = new FormData();
         formData.append('chat_id', id);
-        formData.append('caption', `📅 <b>REPORTE MENSUAL DE RENDIMIENTO</b>\n\n📌 Periodo: <code>${periodLabel}</code>\n${topSellerMsg}\n📊 Ventas Totales: <b>${formatCurrency(sales.reduce((sum, s) => sum + parseFloat(s.total || 0), 0))}</b>\n🕒 Generado: ${now.toLocaleString('es-CO')}\n\nAdjuntamos el informe en PDF con el Cuadro de Honor y el desglose de auditoría por colaboradora.`);
+        formData.append('caption', `📅 <b>REPORTE MENSUAL DE RENDIMIENTO</b>\n\n📌 Periodo: <code>${periodLabel}</code>\n${topSellerMsg}\n📊 Ventas Totales: <b>${formatCurrency(totalMonthlyRevenue)}</b>\n🏷️ Costo Mercancía: <b>${formatCurrency(totalMonthlyCost)}</b>\n📈 Ganancia Ventas (Utilidad): <b>${formatCurrency(totalMonthlyProfit)} (${monthlyMargin.toFixed(1)}%)</b>\n🕒 Generado: ${now.toLocaleString('es-CO')}\n\nAdjuntamos el informe en PDF con el Cuadro de Honor y el desglose de auditoría por colaboradora.`);
         formData.append('parse_mode', 'HTML');
         formData.append('document', fileBlob, safeName);
 
@@ -366,7 +413,7 @@ async function main() {
       sentReports[periodId] = {
         sent_at: new Date().toISOString(),
         label: periodLabel,
-        total_sales: sales.reduce((sum, s) => sum + parseFloat(s.total || 0), 0)
+        total_sales: totalMonthlyRevenue
       };
       fs.writeFileSync(logFilePath, JSON.stringify(sentReports, null, 2), 'utf8');
       console.log("📝 Registro local mensual actualizado.");

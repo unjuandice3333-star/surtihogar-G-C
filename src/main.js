@@ -5360,7 +5360,7 @@ window.generateAdminSalesReportPDF = async () => {
     const topSellers = Object.entries(sellerPerformance).sort((a,b) => b[1].total - a[1].total);
     const topProducts = Object.entries(productPerformance).sort((a,b) => b[1] - a[1]).slice(0,3);
 
-    const dynamicHeight = 90 + (usedPayMethods.length * 4) + (usedExpCategories.length * 4) + (topSellers.length * 4) + (topProducts.length * 4);
+    const dynamicHeight = 106 + (usedPayMethods.length * 4) + (usedExpCategories.length * 4) + (topSellers.length * 4) + (topProducts.length * 4);
 
     // Dibujar contenedor estilizado de Balance General
     doc.setFillColor(248, 250, 252); // Gris neutro suave
@@ -5421,50 +5421,68 @@ window.generateAdminSalesReportPDF = async () => {
     doc.setDrawColor(148, 163, 184);
     doc.line(160, currentOffsetY + 15, 277, currentOffsetY + 15);
 
-    // BLOQUE B: Estado de Resultados (EBITDA)
+    const grossProfit = totalRevenue - totalCost;
+    const grossMarginPct = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
+    const netProfit = totalRevenue - totalCost - totalOpExpenses;
+    const netMarginPct = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+
+    // BLOQUE B: Estado de Resultados (EBITDA y Rentabilidad)
     doc.setFontSize(9);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(13, 148, 136); // Turquesa de rentabilidad
-    doc.text("[*] ESTADO DE RESULTADOS (EBITDA)", 160, currentOffsetY + 21);
+    doc.text("[*] ESTADO DE RESULTADOS (RENTABILIDAD)", 160, currentOffsetY + 21);
 
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(8.5);
+    doc.setFontSize(8);
     doc.setTextColor(30, 41, 59);
     
-    doc.text(`(-) Costos de Mercancía:`, 160, currentOffsetY + 27);
-    doc.text(`(${formatCurrency(totalCost)})`, 240, currentOffsetY + 27);
+    doc.text(`(+) Ingresos por Ventas:`, 160, currentOffsetY + 26);
+    doc.text(`${formatCurrency(totalRevenue)}`, 240, currentOffsetY + 26);
+    doc.text(`(-) Costos de Mercancía:`, 160, currentOffsetY + 30);
+    doc.text(`(${formatCurrency(totalCost)})`, 240, currentOffsetY + 30);
 
-    doc.setDrawColor(226, 232, 240);
-    doc.line(160, currentOffsetY + 30, 277, currentOffsetY + 30);
+    doc.setFont("helvetica", "bold");
+    doc.text(`(=) UTILIDAD BRUTA (Ganancia):`, 160, currentOffsetY + 35);
+    doc.text(`${formatCurrency(grossProfit)}`, 240, currentOffsetY + 35);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(13, 148, 136);
+    doc.text(`      > Margen de Ganancia:`, 160, currentOffsetY + 39);
+    doc.text(`${grossMarginPct.toFixed(1)}%`, 240, currentOffsetY + 39);
+
+    doc.setTextColor(185, 28, 28);
+    doc.text(`(-) Gastos Operativos:`, 160, currentOffsetY + 44);
+    doc.text(`(${formatCurrency(totalOpExpenses)})`, 240, currentOffsetY + 44);
+
+    doc.setDrawColor(148, 163, 184);
+    doc.line(160, currentOffsetY + 47, 277, currentOffsetY + 47);
 
     doc.setFont("helvetica", "bold");
     doc.setTextColor(15, 23, 42);
-    doc.setFontSize(10.5);
-    doc.text(`UTILIDAD NETA REAL:`, 160, currentOffsetY + 35);
-    doc.text(`${formatCurrency(realProfit)}`, 240, currentOffsetY + 35);
-
-    doc.setTextColor(13, 148, 136); 
-    doc.setFontSize(10);
-    doc.text(`MARGEN REAL BRUTO:`, 160, currentOffsetY + 41);
-    doc.text(`${profitMarginPct.toFixed(2)}%`, 240, currentOffsetY + 41);
+    doc.setFontSize(9);
+    doc.text(`(=) UTILIDAD NETA REAL:`, 160, currentOffsetY + 51);
+    doc.text(`${formatCurrency(netProfit)}`, 240, currentOffsetY + 51);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.text(`      > Margen Neto Final:`, 160, currentOffsetY + 55);
+    doc.text(`${netMarginPct.toFixed(1)}%`, 240, currentOffsetY + 55);
 
     // Línea divisoria analíticas
     doc.setDrawColor(148, 163, 184);
-    doc.line(160, currentOffsetY + 45, 277, currentOffsetY + 45);
+    doc.line(160, currentOffsetY + 59, 277, currentOffsetY + 59);
 
     // BLOQUE C: Métricas y Rendimiento Comercial
     doc.setFontSize(9);
     doc.setTextColor(30, 41, 59);
-    doc.text("[i] RENDIMIENTO Y MÉTRICAS COMERCIALES", 160, currentOffsetY + 51);
+    doc.text("[i] RENDIMIENTO Y MÉTRICAS COMERCIALES", 160, currentOffsetY + 65);
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    doc.text(`Total Transacciones (Facturas):`, 160, currentOffsetY + 56);
-    doc.text(`${totalTrx}`, 240, currentOffsetY + 56);
-    doc.text(`Ticket Promedio de Venta:`, 160, currentOffsetY + 60);
-    doc.text(`${formatCurrency(avgTicket)}`, 240, currentOffsetY + 60);
+    doc.text(`Total Transacciones (Facturas):`, 160, currentOffsetY + 70);
+    doc.text(`${totalTrx}`, 240, currentOffsetY + 70);
+    doc.text(`Ticket Promedio de Venta:`, 160, currentOffsetY + 74);
+    doc.text(`${formatCurrency(avgTicket)}`, 240, currentOffsetY + 74);
 
-    currentOffsetY += 66;
+    currentOffsetY += 80;
 
     if (topSellers.length > 0) {
       doc.setFont("helvetica", "bold");
@@ -5863,13 +5881,13 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
        if ((t.payment_method || 'Efectivo').toLowerCase() === 'efectivo') cashExpenses += amt;
     });
 
-    const cashRevenue = paymentBreakdown.Efectivo || 0;
-    const digitalRevenue = totalRevenue - cashRevenue;
-    const cashBalance = cashRevenue - cashExpenses;
+    const totalProfit = totalRevenue - totalCost;
+    const profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+    const netEbitda = totalRevenue - totalCost - totalOpExpenses;
 
     doc.setFillColor(241, 245, 249);
     doc.setDrawColor(203, 213, 225);
-    doc.rect(15, rectY, 267, 45, 'FD');
+    doc.rect(15, rectY, 267, 58, 'FD');
 
     doc.setTextColor(15, 23, 42);
     doc.setFont("helvetica", "bold");
@@ -5879,18 +5897,28 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
     doc.setFontSize(8.5);
     doc.setFont("helvetica", "normal");
     doc.text(`• Total Ventas Netas: ${formatCurrency(totalRevenue)}`, 20, rectY + 16);
-    doc.text(`• Ingresos Recibidos en Efectivo: ${formatCurrency(cashRevenue)}`, 20, rectY + 23);
-    doc.text(`• Ingresos Recibidos en Digital: ${formatCurrency(digitalRevenue)}`, 20, rectY + 30);
-    doc.text(`• Unidades Totales Despachadas: ${totalUnits} unds`, 20, rectY + 37);
+    doc.text(`• Costo de Mercancía (CMV): ${formatCurrency(totalCost)}`, 20, rectY + 23);
+    
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(21, 128, 61);
+    doc.text(`• Ganancia Real en Ventas: ${formatCurrency(totalProfit)}`, 20, rectY + 30);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(15, 23, 42);
+    doc.text(`• Ingresos en Efectivo: ${formatCurrency(cashRevenue)}`, 20, rectY + 37);
+    doc.text(`• Ingresos en Digital: ${formatCurrency(digitalRevenue)}`, 20, rectY + 44);
+    doc.text(`• Unidades Totales Despachadas: ${totalUnits} unds`, 20, rectY + 51);
 
     doc.text(`• Total Gastos Operativos: ${formatCurrency(totalOpExpenses)}`, 140, rectY + 16);
     doc.text(`• Gastos Pagados en Efectivo: ${formatCurrency(cashExpenses)}`, 140, rectY + 23);
+    doc.text(`• Flujo Efectivo Caja (Efectivo Ventas - Gastos): ${formatCurrency(cashBalance)}`, 140, rectY + 30);
     
-    const netEbitda = totalRevenue - totalCost - totalOpExpenses;
     doc.setFont("helvetica", "bold");
-    doc.text(`• FLUJO EFECTIVO CAJA (Efectivo Ventas - Efectivo Gastos): ${formatCurrency(cashBalance)}`, 140, rectY + 30);
+    doc.setTextColor(21, 128, 61);
+    doc.text(`• Porcentaje de Ganancia: ${profitMargin.toFixed(1)}%`, 140, rectY + 37);
+    
     doc.setTextColor(netEbitda >= 0 ? 21 : 185, netEbitda >= 0 ? 128 : 28, netEbitda >= 0 ? 61 : 28);
-    doc.text(`• EXCEDENTE NETO ESTIMADO (Ventas - Costos - Gastos): ${formatCurrency(netEbitda)}`, 140, rectY + 37);
+    doc.text(`• Excedente Neto Estimado: ${formatCurrency(netEbitda)}`, 140, rectY + 44);
 
     const { data: configs } = await supabase
       .from('system_logs')
@@ -5922,7 +5950,7 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
       try {
         const formData = new FormData();
         formData.append('chat_id', id);
-        formData.append('caption', `📊 <b>REPORTE DE VENTAS ${periodLabel}</b>\n📅 Rango: <code>${dateRangeLabel.replace(/_/g, ' ')}</code>\n🕒 Generado: ${new Date().toLocaleString('es-CO')}\n💰 Total Ventas: <b>${formatCurrency(totalRevenue)}</b>\n🔻 Gastos: <b>${formatCurrency(totalOpExpenses)}</b>\n📈 Neto: <b>${formatCurrency(netEbitda)}</b>`);
+        formData.append('caption', `📊 <b>REPORTE DE VENTAS ${periodLabel}</b>\n📅 Rango: <code>${dateRangeLabel.replace(/_/g, ' ')}</code>\n🕒 Generado: ${new Date().toLocaleString('es-CO')}\n💰 Total Ventas: <b>${formatCurrency(totalRevenue)}</b>\n🏷️ Costo Mercancía: <b>${formatCurrency(totalCost)}</b>\n📈 Ganancia Ventas (Utilidad): <b>${formatCurrency(totalProfit)} (${profitMargin.toFixed(1)}%)</b>\n🔻 Gastos: <b>${formatCurrency(totalOpExpenses)}</b>\n📈 Excedente Neto: <b>${formatCurrency(netEbitda)}</b>`);
         formData.append('parse_mode', 'HTML');
         formData.append('document', rawBlob, safeName);
 

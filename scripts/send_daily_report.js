@@ -379,9 +379,13 @@ async function main() {
     const digitalRevenue = totalRevenue - cashRevenue;
     const cashBalance = cashRevenue - cashExpenses;
 
+    const totalProfit = totalRevenue - totalCost;
+    const profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
+    const netEbitda = totalRevenue - totalCost - totalOpExpenses;
+
     doc.setFillColor(241, 245, 249);
     doc.setDrawColor(203, 213, 225);
-    doc.rect(15, rectY, 267, 45, 'FD');
+    doc.rect(15, rectY, 267, 58, 'FD');
 
     doc.setTextColor(15, 23, 42);
     doc.setFont("helvetica", "bold");
@@ -391,18 +395,28 @@ async function main() {
     doc.setFontSize(8.5);
     doc.setFont("helvetica", "normal");
     doc.text(`• Total Ventas Netas: ${formatCurrency(totalRevenue)}`, 20, rectY + 16);
-    doc.text(`• Ingresos Recibidos en Efectivo: ${formatCurrency(cashRevenue)}`, 20, rectY + 23);
-    doc.text(`• Ingresos Recibidos en Digital: ${formatCurrency(digitalRevenue)}`, 20, rectY + 30);
-    doc.text(`• Unidades Totales Despachadas: ${totalUnits} unds`, 20, rectY + 37);
+    doc.text(`• Costo de Mercancía (CMV): ${formatCurrency(totalCost)}`, 20, rectY + 23);
+    
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(21, 128, 61);
+    doc.text(`• Ganancia Real en Ventas: ${formatCurrency(totalProfit)}`, 20, rectY + 30);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(15, 23, 42);
+    doc.text(`• Ingresos en Efectivo: ${formatCurrency(cashRevenue)}`, 20, rectY + 37);
+    doc.text(`• Ingresos en Digital: ${formatCurrency(digitalRevenue)}`, 20, rectY + 44);
+    doc.text(`• Unidades Totales Despachadas: ${totalUnits} unds`, 20, rectY + 51);
 
     doc.text(`• Total Gastos Operativos: ${formatCurrency(totalOpExpenses)}`, 140, rectY + 16);
     doc.text(`• Gastos Pagados en Efectivo: ${formatCurrency(cashExpenses)}`, 140, rectY + 23);
+    doc.text(`• Flujo Efectivo Caja (Efectivo Ventas - Gastos): ${formatCurrency(cashBalance)}`, 140, rectY + 30);
     
-    const netEbitda = totalRevenue - totalCost - totalOpExpenses;
     doc.setFont("helvetica", "bold");
-    doc.text(`• FLUJO EFECTIVO CAJA (Efectivo Ventas - Efectivo Gastos): ${formatCurrency(cashBalance)}`, 140, rectY + 30);
+    doc.setTextColor(21, 128, 61);
+    doc.text(`• Porcentaje de Ganancia: ${profitMargin.toFixed(1)}%`, 140, rectY + 37);
+    
     doc.setTextColor(netEbitda >= 0 ? 21 : 185, netEbitda >= 0 ? 128 : 28, netEbitda >= 0 ? 61 : 28);
-    doc.text(`• EXCEDENTE NETO ESTIMADO (Ventas - Costos - Gastos): ${formatCurrency(netEbitda)}`, 140, rectY + 37);
+    doc.text(`• Excedente Neto Estimado: ${formatCurrency(netEbitda)}`, 140, rectY + 44);
 
     // 6. Enviar a Telegram
     console.log("📤 Enviando documento PDF a Telegram...");
@@ -419,7 +433,7 @@ async function main() {
       try {
         const formData = new FormData();
         formData.append('chat_id', id);
-        formData.append('caption', `📊 <b>REPORTE DIARIO DE VENTAS (AUTOMÁTICO)</b>\n📅 Rango: <code>${targetDateStr}</code>\n🕒 Generado: ${new Date().toLocaleString('es-CO')}\n💰 Total Ventas: <b>${formatCurrency(totalRevenue)}</b>\n🔻 Gastos: <b>${formatCurrency(totalOpExpenses)}</b>\n📈 Neto: <b>${formatCurrency(netEbitda)}</b>`);
+        formData.append('caption', `📊 <b>REPORTE DIARIO DE VENTAS (AUTOMÁTICO)</b>\n📅 Rango: <code>${targetDateStr}</code>\n🕒 Generado: ${new Date().toLocaleString('es-CO')}\n💰 Total Ventas: <b>${formatCurrency(totalRevenue)}</b>\n🏷️ Costo Mercancía: <b>${formatCurrency(totalCost)}</b>\n📈 Ganancia Ventas (Utilidad): <b>${formatCurrency(totalProfit)} (${profitMargin.toFixed(1)}%)</b>\n🔻 Gastos: <b>${formatCurrency(totalOpExpenses)}</b>\n📈 Excedente Neto: <b>${formatCurrency(netEbitda)}</b>`);
         formData.append('parse_mode', 'HTML');
         formData.append('document', fileBlob, safeName);
 
