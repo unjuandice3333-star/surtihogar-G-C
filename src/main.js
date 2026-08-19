@@ -3864,57 +3864,59 @@ const render = () => {
             </button>
           </div>
 
-          <!-- FORMULARIO PARA AGREGAR ITEM -->
-          <form onsubmit="window.saveShoppingItem(event)" style="padding:15px 0; border-bottom:1px solid #e2e8f0; display:grid; grid-template-columns: 2fr 1fr; gap:10px; align-items:end;">
-            <div class="form-group" style="margin:0;">
-              <label style="font-size:11px; font-weight:700;">Producto / Artículo</label>
-              <input type="text" name="name" class="form-input" placeholder="Ej: Jabón de loza, Ganchos..." required style="height:38px; font-size:13px;">
-            </div>
-            <div class="form-group" style="margin:0;">
-              <label style="font-size:11px; font-weight:700;">Cant.</label>
-              <input type="number" name="quantity" class="form-input" value="1" min="1" required style="height:38px; font-size:13px;">
-            </div>
-            
-            <div class="form-group" style="margin:0; grid-column: span 2;">
-              <label style="font-size:11px; font-weight:700;">Local Destino</label>
-              <select name="business_id" class="form-input" required style="height:38px; font-size:13px;">
-                ${state.businesses
-                  .filter(b => !['Mi Primer Negocio', 'Mi Negocio Principal', 'Billar', 'Local ropa', 'Droguería', 'Restaurante'].includes(b.name))
-                  .map(b => `<option value="${b.id}" ${state.activeShiftBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
-              </select>
-            </div>
-            
-            <button type="submit" class="btn-primary" style="grid-column: span 2; height:38px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:6px; background:var(--success);">
-              <i data-lucide="plus-circle" style="width:16px;"></i> AGREGAR A LA LISTA
-            </button>
-          </form>
-
-          <!-- SECCIÓN: RELLENAR POR VENTAS EN UN RANGO DE FECHAS -->
-          <div style="padding: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; margin-top: 10px; margin-bottom: 10px;">
-            <p style="font-size: 11px; font-weight: 800; color: #166534; text-transform: uppercase; margin-top: 0; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
-              📊 Rellenar por Ventas (Por Rango de Fechas)
-            </p>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
-              <div class="form-group" style="margin: 0;">
-                <label style="font-size: 10px; font-weight: 700; margin-bottom: 4px; color:#166534;">Fecha Inicio</label>
-                <input type="date" id="replenish-start-date" class="form-input" style="height: 32px; font-size: 12px; padding: 4px 8px; border-color:#bbf7d0;" value="${(() => {
-                  const d = new Date();
-                  d.setDate(d.getDate() - 7);
-                  return d.toISOString().split('T')[0];
-                })()}">
+          <!-- CONTENEDOR CON SCROLL QUE ENGLOBA FORMULARIOS Y LISTADO -->
+          <div style="flex:1; overflow-y:auto; padding:10px 0 0 0; display:flex; flex-direction:column; gap:15px;">
+            <!-- FORMULARIO PARA AGREGAR ITEM -->
+            <form onsubmit="window.saveShoppingItem(event)" style="padding-bottom:15px; border-bottom:1px solid #e2e8f0; display:grid; grid-template-columns: 2fr 1fr; gap:10px; align-items:end;">
+              <div class="form-group" style="margin:0;">
+                <label style="font-size:11px; font-weight:700;">Producto / Artículo</label>
+                <input type="text" name="name" class="form-input" placeholder="Ej: Jabón de loza, Ganchos..." required style="height:38px; font-size:13px; padding:6px 12px;">
               </div>
-              <div class="form-group" style="margin: 0;">
-                <label style="font-size: 10px; font-weight: 700; margin-bottom: 4px; color:#166534;">Fecha Fin</label>
-                <input type="date" id="replenish-end-date" class="form-input" style="height: 32px; font-size: 12px; padding: 4px 8px; border-color:#bbf7d0;" value="${new Date().toISOString().split('T')[0]}">
+              <div class="form-group" style="margin:0;">
+                <label style="font-size:11px; font-weight:700;">Cant.</label>
+                <input type="number" name="quantity" class="form-input" value="1" min="1" required style="height:38px; font-size:13px; padding:6px 12px;">
               </div>
-            </div>
-            <button type="button" onclick="window.previewAndReplenishSold()" class="btn-primary" style="width: 100%; height: 34px; font-size: 12px; font-weight: 700; background: #16a34a; border: none; display: flex; align-items: center; justify-content: center; gap: 6px;">
-              🔍 CONSULTAR Y AGREGAR VENDIDOS
-            </button>
-          </div>
+              
+              <div class="form-group" style="margin:0; grid-column: span 2;">
+                <label style="font-size:11px; font-weight:700;">Local Destino</label>
+                <select name="business_id" class="form-input" required style="height:38px; font-size:13px; padding:6px 12px;">
+                  ${state.businesses
+                    .filter(b => !['Mi Primer Negocio', 'Mi Negocio Principal', 'Billar', 'Local ropa', 'Droguería', 'Restaurante'].includes(b.name))
+                    .map(b => `<option value="${b.id}" ${state.activeShiftBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+                </select>
+              </div>
+              
+              <button type="submit" class="btn-primary" style="grid-column: span 2; height:38px; font-size:13px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:6px; background:var(--success);">
+                <i data-lucide="plus-circle" style="width:16px;"></i> AGREGAR A LA LISTA
+              </button>
+            </form>
 
-          <!-- LISTADO DE ITEMS -->
-          <div style="flex:1; overflow-y:auto; padding:15px 0;">
+            <!-- SECCIÓN: RELLENAR POR VENTAS EN UN RANGO DE FECHAS -->
+            <div style="padding: 12px; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px;">
+              <p style="font-size: 11px; font-weight: 800; color: #166534; text-transform: uppercase; margin-top: 0; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">
+                📊 Rellenar por Ventas (Por Rango de Fechas)
+              </p>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+                <div class="form-group" style="margin: 0;">
+                  <label style="font-size: 10px; font-weight: 700; margin-bottom: 4px; color:#166534;">Fecha Inicio</label>
+                  <input type="date" id="replenish-start-date" class="form-input" style="height: 32px; font-size: 12px; padding: 4px 8px; border-color:#bbf7d0;" value="${(() => {
+                    const d = new Date();
+                    d.setDate(d.getDate() - 7);
+                    return d.toISOString().split('T')[0];
+                  })()}">
+                </div>
+                <div class="form-group" style="margin: 0;">
+                  <label style="font-size: 10px; font-weight: 700; margin-bottom: 4px; color:#166534;">Fecha Fin</label>
+                  <input type="date" id="replenish-end-date" class="form-input" style="height: 32px; font-size: 12px; padding: 4px 8px; border-color:#bbf7d0;" value="${new Date().toISOString().split('T')[0]}">
+                </div>
+              </div>
+              <button type="button" onclick="window.previewAndReplenishSold()" class="btn-primary" style="width: 100%; height: 34px; font-size: 12px; font-weight: 700; background: #16a34a; border: none; display: flex; align-items: center; justify-content: center; gap: 6px;">
+                🔍 CONSULTAR Y AGREGAR VENDIDOS
+              </button>
+            </div>
+
+            <!-- LISTADO DE ITEMS -->
+            <div style="padding:15px 0;">
             
             <!-- Pendientes -->
             <h3 style="font-size:12px; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-bottom:10px; display:flex; align-items:center; gap:6px;">
@@ -3986,9 +3988,9 @@ const render = () => {
               </div>
             ` : ''}
 
-          </div>
+          </div></div>
 
-          <div style="padding:15px 0 0 0; border-top:1px solid #e2e8f0; text-align:right;">
+          <div style="padding:10px 0 0 0; border-top:1px solid #e2e8f0; text-align:right; flex-shrink:0;">
             <button onclick="state.activeModal=null;render()" class="btn-primary" style="background:#64748b; padding:8px 20px; font-size:12px;">CERRAR</button>
           </div>
         </div>
