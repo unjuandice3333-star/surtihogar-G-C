@@ -2346,7 +2346,10 @@ const render = () => {
                   <p style="font-size:10px; color:#94a3b8; margin-top:2px;">Por: ${state.employees.find(e => e.id === p.created_by)?.name || 'COLABORADOR'} - ${new Date(p.created_at).toLocaleDateString()}</p>
                 </div>
               </div>
-              <button onclick="window.convertToRealProduct('${p.id}')" class="btn-primary" style="width:auto; padding:8px 15px; font-size:12px;">FORMALIZAR</button>
+              <div style="display:flex; gap:8px;">
+                <button onclick="window.convertToRealProduct('${p.id}')" class="btn-primary" style="width:auto; padding:8px 15px; font-size:12px;">FORMALIZAR</button>
+                <button onclick="window.deletePendingProduct('${p.id}')" class="btn-primary" style="width:auto; padding:8px 15px; font-size:12px; background:var(--danger); border:none;">ELIMINAR</button>
+              </div>
             </div>
           `).join('')}
         </div>
@@ -2379,6 +2382,7 @@ const render = () => {
                 <th style="padding:15px; text-align:left; border-bottom:1px solid #f1f5f9;">Costo</th>
                 <th style="padding:15px; text-align:left; border-bottom:1px solid #f1f5f9;">Stock</th>
                 <th style="padding:15px; text-align:left; border-bottom:1px solid #f1f5f9;">Registrado por</th>
+                <th style="padding:15px; text-align:center; border-bottom:1px solid #f1f5f9;">Acciones</th>
               </tr>
             </thead>
             <tbody>
@@ -2391,6 +2395,11 @@ const render = () => {
                   <td style="padding:15px; color:var(--text-muted);">${formatCurrency(p.cost || 0)}</td>
                   <td style="padding:15px;"><span style="background:${p.stock < 5 ? '#fee2e2' : '#f0f9ff'}; color:${p.stock < 5 ? '#b91c1c' : '#0369a1'}; padding:4px 10px; border-radius:10px; font-weight:700;">${p.stock}</span></td>
                   <td style="padding:15px; font-size:11px; color:var(--primary); font-weight:600;">👤 ${state.employees.find(e => e.id === p.created_by)?.name || 'Admin'}</td>
+                  <td style="padding:15px; text-align:center;">
+                    <button onclick="window.deleteProduct('${p.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center;" title="Eliminar Producto">
+                      <i data-lucide="trash-2" style="width:16px; height:16px;"></i>
+                    </button>
+                  </td>
                 </tr>
               `}).join('')}
             </tbody>
@@ -6616,6 +6625,39 @@ window.fillFromPending = (id) => {
   if (nameInput) nameInput.value = pending.name;
   if (priceInput) priceInput.value = pending.price;
   window.updateMarginCalc();
+};
+
+window.deletePendingProduct = async (id) => {
+  if (!confirm("¿Estás seguro de que deseas eliminar este producto pendiente de formalización?")) return;
+  try {
+    const { error } = await supabase.from('pending_products').delete().eq('id', id);
+    if (error) throw error;
+    window.showToast("✅ Producto pendiente eliminado", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error: " + err.message, "danger");
+  }
+};
+
+window.deleteProduct = async (id) => {
+  if (!confirm("¿Estás seguro de que deseas eliminar este producto permanentemente del inventario? Esta acción no se puede deshacer y fallará si el producto tiene ventas asociadas.")) return;
+  try {
+    const { error } = await supabase.from('products').delete().eq('id', id);
+    if (error) {
+      if (error.code === '23503') {
+        throw new Error("No se puede eliminar este producto porque ya tiene ventas o movimientos de inventario registrados.");
+      }
+      throw error;
+    }
+    window.showToast("✅ Producto eliminado del inventario", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ " + err.message, "danger");
+  }
 };
 
 window.saveShoppingItem = async (e) => {
