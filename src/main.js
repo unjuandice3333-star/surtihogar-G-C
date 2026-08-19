@@ -2490,7 +2490,17 @@ const render = () => {
                     <td style="padding:15px; font-weight:600;">${p.name}${genderBadge}${bizBadge}</td>
                     <td style="padding:15px;">${formatCurrency(p.price)}</td>
                     <td style="padding:15px; color:var(--text-muted);">${formatCurrency(p.cost || 0)}</td>
-                    <td style="padding:15px;"><span style="background:${p.stock < 5 ? '#fee2e2' : '#f0f9ff'}; color:${p.stock < 5 ? '#b91c1c' : '#0369a1'}; padding:4px 10px; border-radius:10px; font-weight:700;">${p.stock}</span></td>
+                    <td style="padding:15px; white-space:nowrap;">
+                      <span style="background:${p.stock < (p.purchase_price || 0) ? '#fee2e2' : '#f0f9ff'}; color:${p.stock < (p.purchase_price || 0) ? '#b91c1c' : '#0369a1'}; padding:4px 10px; border-radius:10px; font-weight:700;">
+                        ${p.stock}
+                      </span>
+                      <span style="font-size: 11px; color: var(--text-muted); margin-left: 5px;" title="Stock Fijo / Ideal">
+                        / Fijo: 
+                        <span onclick="window.editIdealStock('${p.id}', ${p.purchase_price || 0})" style="color:var(--primary); font-weight:bold; cursor:pointer; text-decoration:underline;">
+                          ${p.purchase_price || 0}
+                        </span>
+                      </span>
+                    </td>
                     <td style="padding:15px; font-size:11px; color:var(--primary); font-weight:600;">👤 ${state.employees.find(e => e.id === p.created_by)?.name || 'Admin'}</td>
                     <td style="padding:15px; text-align:center;">
                       <button onclick="window.deleteProduct('${p.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center;" title="Eliminar Producto">
@@ -3816,11 +3826,17 @@ const render = () => {
             </div>` : '';
             })()}
 
-            <div class="form-group">
-              <label>Stock Inicial</label>
-              <input type="number" name="stock" class="form-input" placeholder="0" required min="0">
-              <p style="font-size:10px; color:var(--text-muted); margin-top:5px;">Se generará un movimiento de entrada automáticamente.</p>
+            <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+              <div class="form-group">
+                <label>Stock Inicial</label>
+                <input type="number" name="stock" class="form-input" placeholder="0" required min="0" value="0">
+              </div>
+              <div class="form-group">
+                <label>Stock Fijo / Ideal</label>
+                <input type="number" name="purchase_price" class="form-input" placeholder="Ej: 10" required min="0" value="0">
+              </div>
             </div>
+            <p style="font-size:10px; color:var(--text-muted); margin-top:5px; margin-bottom:15px;">El stock fijo sirve para generar automáticamente la lista de compras semanal y rellenar faltantes.</p>
             
             <button class="btn-primary" style="width:100%; margin-top:10px; background:var(--secondary);">✅ REGISTRAR E INICIALIZAR</button>
           </form>
@@ -3837,9 +3853,14 @@ const render = () => {
         <div class="modal-card card" style="max-width:500px; max-height:85vh; display:flex; flex-direction:column; overflow:hidden;">
           <div class="modal-close" onclick="state.activeModal=null;render()"><i data-lucide="x"></i></div>
           
-          <div style="padding:10px 0 15px 0; border-bottom:1px solid #e2e8f0;">
-            <h2 style="display:flex; align-items:center; gap:8px; margin:0;"><i data-lucide="shopping-cart" style="color:var(--primary);"></i> Lista de Compras</h2>
-            <p style="font-size:12px; color:var(--text-muted); margin:5px 0 0 0;">Registra los productos que hacen falta traer para los locales.</p>
+          <div style="padding:10px 0 15px 0; border-bottom:1px solid #e2e8f0; display:flex; justify-content:space-between; align-items:center; gap:10px;">
+            <div>
+              <h2 style="display:flex; align-items:center; gap:8px; margin:0;"><i data-lucide="shopping-cart" style="color:var(--primary);"></i> Lista de Compras</h2>
+              <p style="font-size:12px; color:var(--text-muted); margin:5px 0 0 0;">Registra los productos que hacen falta traer para los locales.</p>
+            </div>
+            <button onclick="window.autoReplenishStock()" class="btn-primary" style="padding:6px 12px; font-size:11px; background:var(--primary); font-weight:bold; border:none; display:flex; align-items:center; gap:4px; height:auto; width:auto;" title="Generar automáticamente faltantes para completar el Stock Fijo">
+              <i data-lucide="refresh-cw" style="width:12px;"></i> AUTO-RELLENAR
+            </button>
           </div>
 
           <!-- FORMULARIO PARA AGREGAR ITEM -->
@@ -6853,6 +6874,88 @@ window.replicateSelectedWeek = async () => {
   }
 };
 
+window.editIdealStock = async (id, currentVal) => {
+  const newValStr = prompt("Ingresa el nuevo Stock Fijo / Ideal para este producto (el inventario que siempre deseas mantener):", currentVal);
+  if (newValStr === null) return;
+  const newVal = parseInt(newValStr, 10);
+  if (isNaN(newVal) || newVal < 0) {
+    window.showToast("⚠️ Debes ingresar un número válido mayor o igual a 0.", "danger");
+    return;
+  }
+  
+  try {
+    const { error } = await supabase
+      .from('products')
+      .update({ purchase_price: newVal })
+      .eq('id', id);
+      
+    if (error) throw error;
+    window.showToast("✅ Stock Fijo / Ideal actualizado", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error: " + err.message, "danger");
+  }
+};
+
+window.autoReplenishStock = async () => {
+  // Encontrar productos que tengan stock menor al ideal (purchase_price > stock) y purchase_price > 0
+  const lowStockProducts = (state.products || []).filter(p => (p.purchase_price || 0) > 0 && p.stock < p.purchase_price);
+  
+  if (lowStockProducts.length === 0) {
+    alert("Todos los productos tienen su stock completo según el Stock Fijo / Ideal configurado.");
+    return;
+  }
+  
+  if (!confirm(`Se detectaron ${lowStockProducts.length} productos con stock menor al nivel fijo.\n\n¿Deseas agregarlos automáticamente a la lista de compras con la cantidad necesaria para completarlos?`)) {
+    return;
+  }
+  
+  try {
+    window.showToast("⏳ Agregando a la lista...", "info");
+    
+    // Generar items para insertar en la tabla shopping_list
+    const itemsToInsert = [];
+    
+    for (const p of lowStockProducts) {
+      const neededQty = p.purchase_price - p.stock;
+      
+      // Comprobar si ya existe este producto pendiente en la lista de compras para no duplicar
+      const alreadyListed = (state.shoppingList || []).some(item => 
+        item.status === 'pending' && 
+        item.business_id === p.business_id && 
+        item.name.toLowerCase().includes(p.name.toLowerCase())
+      );
+      
+      if (!alreadyListed) {
+        itemsToInsert.push({
+          name: `${p.name} (Rellenar stock)`,
+          quantity: neededQty,
+          business_id: p.business_id,
+          created_by: state.user.id,
+          status: 'pending'
+        });
+      }
+    }
+    
+    if (itemsToInsert.length === 0) {
+      window.showToast("✅ Los artículos ya estaban agregados en la lista de compras.", "success");
+      return;
+    }
+    
+    const { error } = await supabase.from('shopping_list').insert(itemsToInsert);
+    if (error) throw error;
+    
+    window.showToast(`✅ Se agregaron ${itemsToInsert.length} artículos a la lista de compras`, "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("⚠️ Error auto-rellenando stock: " + err.message, "danger");
+  }
+};
+
 window.saveShoppingItem = async (e) => {
   e.preventDefault();
   const btn = e.target.querySelector('button');
@@ -6947,6 +7050,7 @@ window.saveNewProduct = async (e) => {
     const price = window.getCleanNumber(formData.get('price'));
     const cost = window.getCleanNumber(formData.get('cost'));
     const stock = window.getCleanNumber(formData.get('stock'));
+    const purchase_price = window.getCleanNumber(formData.get('purchase_price')) || 0;
     const busId = formData.get('business_id');
     const pendingId = formData.get('pending_id');
 
@@ -6980,7 +7084,7 @@ window.saveNewProduct = async (e) => {
     }
 
     // 1. Crear el producto (Stock inicial siempre 0 para trazabilidad vía movement)
-    const productPayload = { name, price, cost, stock: 0, business_id: busId, created_by: state.user.id };
+    const productPayload = { name, price, cost, stock: 0, purchase_price, business_id: busId, created_by: state.user.id };
     const genderVal = formData.get('gender');
     if (genderVal) productPayload.gender = genderVal;
     const { data: prod, error: pErr } = await supabase.from('products').insert(productPayload).select().single();
