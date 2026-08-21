@@ -45,6 +45,7 @@ const state = {
   qaResults: [],
   editingRateUser: null,
   posPaymentMethod: 'Efectivo',
+  posDiscount: 0,
   cashClosures: []
 };
 
@@ -461,7 +462,7 @@ window.fetchData = async () => {
         };
 
         const shPromise = fetchAll('shifts', '*, businesses(name)', 'start_time');
-        const empPromise = safeQuery(supabase.from('users').select('*').neq('role', 'admin'));
+        const empPromise = safeQuery(supabase.from('users').select('*'));
         const salesPromise = fetchAll('sales', '*', 'created_at');
         const itemsPromise = fetchAll('sale_items', '*, products(name, business_id, cost)', null);
         const pendingPromise = safeQuery(supabase.from('pending_products').select('*').order('created_at', { ascending: false }));
@@ -1529,9 +1530,23 @@ const render = () => {
                 <option value="Llano Gas" ${state.posPaymentMethod === 'Llano Gas' ? 'selected' : ''}>🔥 Llano Gas</option>
               </select>
             </div>
+            <div class="form-group" style="margin-bottom:15px;">
+              <label style="font-size:11px; font-weight:700;">Descuento (COP)</label>
+              <input type="number" class="form-input" placeholder="0" min="0" max="${cartTotal}" style="height:36px; padding:0 12px; font-size:13px;" value="${state.posDiscount || ''}" oninput="window.updatePosDiscount(this.value)">
+            </div>
+            ${state.posDiscount > 0 ? `
+              <div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:13px; color:#64748b;">
+                <span>Subtotal</span>
+                <span>${formatCurrency(cartTotal)}</span>
+              </div>
+              <div style="display:flex; justify-content:space-between; margin-bottom:10px; font-size:13px; color:var(--primary);">
+                <span>Descuento</span>
+                <span>- ${formatCurrency(state.posDiscount)}</span>
+              </div>
+            ` : ''}
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
-              <span style="font-weight:600;">TOTAL</span>
-              <span style="font-size:24px; font-weight:800; color:var(--primary);">${formatCurrency(cartTotal)}</span>
+              <span style="font-weight:600;">TOTAL A PAGAR</span>
+              <span style="font-size:24px; font-weight:800; color:var(--primary);">${formatCurrency(Math.max(0, cartTotal - (state.posDiscount || 0)))}</span>
             </div>
             
             ${(!state.activeShiftBusinessId && state.user?.role !== 'admin') ? `
@@ -2328,7 +2343,7 @@ const render = () => {
             </div>
             
             <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:20px;">
-              ${state.employees.map(e => `
+              ${state.employees.filter(e => e.id !== state.user?.id).map(e => `
                 <div style="display:flex; flex-direction:column; background:#ffffff; border:1px solid #edf2f7; border-radius:20px; overflow:hidden; transition:all 0.3s ease; box-shadow:0 4px 10px rgba(0,0,0,0.01);" onmouseover="this.style.borderColor='var(--primary)'; this.style.boxShadow='0 10px 25px rgba(239,68,68,0.08)'" onmouseout="this.style.borderColor='#edf2f7'; this.style.boxShadow='0 4px 10px rgba(0,0,0,0.01)'">
                   <div style="padding:18px; border-bottom:1px solid #f8fafc; display:flex; justify-content:space-between; align-items:center;">
                     <div style="display:flex; align-items:center; gap:12px;">
@@ -2355,14 +2370,18 @@ const render = () => {
                   </div>
                   
                   <div style="padding:15px 18px; display:flex; justify-content:space-between; align-items:center;">
-                    <div style="display:flex; gap:15px;">
-                      <label style="display:flex; align-items:center; gap:8px; cursor:pointer;" title="Permite gestionar movimientos de caja">
-                        <input type="checkbox" onchange="window.toggleCashierPermission('${e.id}', ${e.is_cashier})" ${e.is_cashier ? 'checked' : ''} style="width:18px; height:18px; border-radius:6px; accent-color:var(--secondary);">
-                        <span style="font-size:11px; font-weight:850; color:${e.is_cashier ? 'var(--secondary)' : '#64748b'}">CAJERO</span>
+                    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+                      <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="Permite gestionar movimientos de caja">
+                        <input type="checkbox" onchange="window.toggleCashierPermission('${e.id}', ${e.is_cashier})" ${e.is_cashier ? 'checked' : ''} style="width:16px; height:16px; border-radius:6px; accent-color:var(--secondary);">
+                        <span style="font-size:10px; font-weight:850; color:${e.is_cashier ? 'var(--secondary)' : '#64748b'}">CAJERO</span>
                       </label>
-                      <label style="display:flex; align-items:center; gap:8px; cursor:pointer;" title="Habilita registro de nuevo inventario">
-                        <input type="checkbox" onchange="window.toggleInventoryPermission('${e.id}', ${e.can_manage_inventory})" ${e.can_manage_inventory ? 'checked' : ''} style="width:18px; height:18px; border-radius:6px; accent-color:var(--success);">
-                        <span style="font-size:11px; font-weight:850; color:${e.can_manage_inventory ? 'var(--success)' : '#64748b'}">INVENTARIO</span>
+                      <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="Habilita registro de nuevo inventario">
+                        <input type="checkbox" onchange="window.toggleInventoryPermission('${e.id}', ${e.can_manage_inventory})" ${e.can_manage_inventory ? 'checked' : ''} style="width:16px; height:16px; border-radius:6px; accent-color:var(--success);">
+                        <span style="font-size:10px; font-weight:850; color:${e.can_manage_inventory ? 'var(--success)' : '#64748b'}">INVENTARIO</span>
+                      </label>
+                      <label style="display:flex; align-items:center; gap:6px; cursor:pointer;" title="Habilita todas las funciones de administrador">
+                        <input type="checkbox" onchange="window.toggleAdminPermission('${e.id}', '${e.role}')" ${e.role === 'admin' ? 'checked' : ''} style="width:16px; height:16px; border-radius:6px; accent-color:var(--primary);">
+                        <span style="font-size:10px; font-weight:850; color:${e.role === 'admin' ? 'var(--primary)' : '#64748b'}">ADMIN</span>
                       </label>
                     </div>
                     <div style="display:flex; gap:12px;">
@@ -2504,6 +2523,9 @@ const render = () => {
                     </td>
                     <td style="padding:15px; font-size:11px; color:var(--primary); font-weight:600;">👤 ${state.employees.find(e => e.id === p.created_by)?.name || 'Admin'}</td>
                     <td style="padding:15px; text-align:center;">
+                      <button onclick="window.openEditProductModal('${p.id}')" style="background:none; border:none; color:var(--primary); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center; margin-right:8px;" title="Editar Producto">
+                        <i data-lucide="edit-3" style="width:16px; height:16px;"></i>
+                      </button>
                       <button onclick="window.deleteProduct('${p.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center;" title="Eliminar Producto">
                         <i data-lucide="trash-2" style="width:16px; height:16px;"></i>
                       </button>
@@ -3025,13 +3047,17 @@ const render = () => {
   }
 
   else if (state.view === 'sales_history_admin') {
+    state.salesHistoryTab = state.salesHistoryTab || 'sales';
+    const activeTab = state.salesHistoryTab;
+    const ventaCatId = state.categories.find(c => c.name === 'Venta' && c.type === 'income')?.id;
+
     html = `
       <header class="main-header">
         <div class="logo-container">
           <div class="logo-icon"><img src="logo_v3.png" alt="Logo"></div>
           <div class="header-title">
             <p class="role-tag" style="background:var(--primary);">Auditoría Central</p>
-            <h1>Historial de Ventas</h1>
+            <h1>Historial y Movimientos</h1>
           </div>
         </div>
         <div class="header-actions">
@@ -3040,10 +3066,16 @@ const render = () => {
       </header>
 
       <div class="container" style="max-width:1200px; padding-top:20px;">
+        <div style="display:flex; gap:10px; margin-bottom:20px;">
+          <button onclick="state.salesHistoryTab='sales';render()" class="btn-primary" style="background:${activeTab === 'sales' ? 'var(--primary)' : '#64748b'}; border:none; padding:10px 20px; border-radius:12px; font-weight:700; font-size:13px; cursor:pointer;">🛍️ Ventas (POS)</button>
+          <button onclick="state.salesHistoryTab='transactions';render()" class="btn-primary" style="background:${activeTab === 'transactions' ? 'var(--primary)' : '#64748b'}; border:none; padding:10px 20px; border-radius:12px; font-weight:700; font-size:13px; cursor:pointer;">💵 Flujo de Caja (Transacciones)</button>
+        </div>
+
         <div class="card" style="padding:0; overflow:hidden; border-radius:20px; box-shadow: var(--shadow-lg);">
+          ${activeTab === 'sales' ? `
           <div style="padding:20px 24px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; background:linear-gradient(to right, #f8fafc, #ffffff);">
             <div>
-              <h3 style="font-size:18px; font-weight:800; color:#1e293b;">Listado Detallado de Movimientos</h3>
+              <h3 style="font-size:18px; font-weight:800; color:#1e293b;">Listado Detallado de Ventas</h3>
               <p style="font-size:12px; color:#64748b; margin-top:2px;">Auditoría por Local Operativo y Producto Vendido</p>
             </div>
             <div style="background:var(--secondary); color:white; font-weight:800; font-size:12px; padding:6px 14px; border-radius:30px;">
@@ -3155,7 +3187,7 @@ const render = () => {
                         <div style="font-weight:900; color:var(--success); font-size:15px; font-family:monospace; display:flex; justify-content:flex-end; align-items:center; gap:8px;">
                           ${formatCurrency(sale.total)}
                           ${state.user?.role === 'admin' ? `
-                            <button onclick="window.openEditSaleModal('${sale.id}', ${sale.total})" style="background:none; border:none; padding:4px; cursor:pointer; color:#94a3b8; border-radius:4px; display:flex; align-items:center; justify-content:center; transition:0.2s;" onmouseover="this.style.background='#f1f5f9'; this.style.color='#0369a1'" onmouseout="this.style.background='none'; this.style.color='#94a3b8'" title="Editar monto de venta">
+                            <button onclick="window.openEditSaleModal('${sale.id}', ${sale.total}, '${sale.payment_method || 'Efectivo'}')" style="background:none; border:none; padding:4px; cursor:pointer; color:#94a3b8; border-radius:4px; display:flex; align-items:center; justify-content:center; transition:0.2s;" onmouseover="this.style.background='#f1f5f9'; this.style.color='#0369a1'" onmouseout="this.style.background='none'; this.style.color='#94a3b8'" title="Editar venta">
                               <i data-lucide="edit-3" style="width:14px; height:14px;"></i>
                             </button>
                           ` : ''}
@@ -3167,6 +3199,77 @@ const render = () => {
               </tbody>
             </table>
           </div>
+          ` : `
+          <div style="padding:20px 24px; border-bottom:1px solid #f1f5f9; display:flex; justify-content:space-between; align-items:center; background:linear-gradient(to right, #f8fafc, #ffffff);">
+            <div>
+              <h3 style="font-size:18px; font-weight:800; color:#1e293b;">Listado Detallado de Transacciones</h3>
+              <p style="font-size:12px; color:#64748b; margin-top:2px;">Auditoría e Historial Completo del Flujo de Caja</p>
+            </div>
+            <div style="background:var(--secondary); color:white; font-weight:800; font-size:12px; padding:6px 14px; border-radius:30px;">
+              ${state.transactions.length} Transacciones
+            </div>
+          </div>
+
+          <div style="overflow-x:auto;">
+            <table style="width:100%; border-collapse:collapse; text-align:left; font-size:13px; min-width:850px;">
+              <thead>
+                <tr style="background:#f8fafc; border-bottom:2px solid #e2e8f0;">
+                  <th style="padding:16px 20px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Referencia / Fecha</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Sede / Negocio</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Categoría / Concepto</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px;">Tipo</th>
+                  <th style="padding:16px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px; text-align:center;">Método</th>
+                  <th style="padding:16px 20px; color:#475569; font-weight:800; text-transform:uppercase; font-size:10px; letter-spacing:0.5px; text-align:right;">Monto</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${state.transactions.length === 0 ? `
+                  <tr><td colspan="6" style="padding:80px; text-align:center; color:#94a3b8;">
+                    <div style="font-size:40px; margin-bottom:15px;">💸</div> Sin transacciones registradas.
+                  </td></tr>
+                ` : state.transactions.map(t => {
+                  const bizName = state.businesses.find(b => b.id === t.business_id)?.name || 'General';
+                  const catName = state.categories.find(c => c.id === t.category_id)?.name || (t.type === 'income' ? 'Ingreso' : 'Egreso');
+                  const isIncome = t.type === 'income';
+
+                  return `
+                    <tr style="border-bottom:1px solid #f1f5f9; background:white; transition:background 0.15s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='white'">
+                      <td style="padding:18px 20px; vertical-align:top;">
+                        <div style="font-weight:800; color:#0f172a; font-family:monospace; background:#f1f5f9; padding:3px 6px; border-radius:6px; display:inline-block; font-size:11px;">#${t.id.slice(0,8).toUpperCase()}</div>
+                        <div style="font-size:11px; color:#64748b; margin-top:6px; display:flex; align-items:center; gap:4px;"><i data-lucide="calendar" style="width:11px;"></i> ${new Date(t.date || t.created_at).toLocaleString('es-CO', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})}</div>
+                      </td>
+                      <td style="padding:18px; vertical-align:top;">
+                        <span style="background:#ecfdf5; color:#047857; border:1px solid #a7f3d0; font-size:11px; font-weight:800; padding:3px 8px; border-radius:8px; white-space:nowrap;">🏬 ${bizName}</span>
+                      </td>
+                      <td style="padding:18px; vertical-align:top;">
+                        <div style="font-weight:700; color:#334155;">${catName}</div>
+                        <div style="font-size:11px; color:#64748b; margin-top:4px;">${t.note || t.description || ''}</div>
+                      </td>
+                      <td style="padding:18px; vertical-align:top;">
+                        <span style="background:${isIncome ? '#dcfce7' : '#fee2e2'}; color:${isIncome ? '#15803d' : '#b91c1c'}; font-weight:800; font-size:11px; padding:4px 10px; border-radius:20px;">
+                          ${isIncome ? 'INGRESO' : 'EGRESO'}
+                        </span>
+                      </td>
+                      <td style="padding:18px; text-align:center; vertical-align:top;">
+                        <span style="background:#f8fafc; color:#475569; font-weight:800; font-size:11px; padding:4px 10px; border-radius:20px; border:1px solid #e2e8f0; white-space:nowrap;">${t.payment_method || 'Efectivo'}</span>
+                      </td>
+                      <td style="padding:18px 20px; text-align:right; vertical-align:top;">
+                        <div style="font-weight:900; color:${isIncome ? 'var(--success)' : 'var(--danger)'}; font-size:15px; font-family:monospace; display:flex; justify-content:flex-end; align-items:center; gap:8px;">
+                          ${isIncome ? '+' : '-'} ${formatCurrency(t.amount)}
+                          ${state.user?.role === 'admin' ? `
+                            <button onclick="window.openEditTransactionModal('${t.id}')" style="background:none; border:none; padding:4px; cursor:pointer; color:#94a3b8; border-radius:4px; display:flex; align-items:center; justify-content:center; transition:0.2s;" onmouseover="this.style.background='#f1f5f9'; this.style.color='#0369a1'" onmouseout="this.style.background='none'; this.style.color='#94a3b8'" title="Editar transacción">
+                              <i data-lucide="edit-3" style="width:14px; height:14px;"></i>
+                            </button>
+                          ` : ''}
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+          `}
         </div>
       </div>
     `;
@@ -4634,8 +4737,142 @@ const render = () => {
             <label style="font-weight:700; color:#334155; font-size:13px;">Nuevo Total de la Venta</label>
             <input type='text' inputmode='numeric' name="new_total" class="form-input currency-input" value="${state.editingSaleTotal || ''}" required style="font-size:20px; font-weight:900; height:50px; text-align:center; color:var(--success);">
             <p style="font-size:11px; color:#94a3b8; margin-top:6px; line-height:1.4;">
-              ⚠️ Esta acción modificará el total de la venta y ajustará automáticamente el ingreso registrado en caja para mantener el balance exacto.
+              ⚠️ Esta acción modificará el total de la venta y ajustará proporcionalmente los precios de los artículos.
             </p>
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Método de Pago</label>
+            <select name="payment_method" class="form-input" required>
+              <option value="Efectivo" ${state.editingSalePaymentMethod === 'Efectivo' ? 'selected' : ''}>💵 Efectivo</option>
+              <option value="Addi" ${state.editingSalePaymentMethod === 'Addi' ? 'selected' : ''}>💳 Addi</option>
+              <option value="Sistecredito" ${state.editingSalePaymentMethod === 'Sistecredito' ? 'selected' : ''}>💳 Sistecredito</option>
+              <option value="Daviplata" ${state.editingSalePaymentMethod === 'Daviplata' ? 'selected' : ''}>📱 Daviplata</option>
+              <option value="Transferencia" ${state.editingSalePaymentMethod === 'Transferencia' ? 'selected' : ''}>🏦 Transferencia</option>
+              <option value="Llano Gas" ${state.editingSalePaymentMethod === 'Llano Gas' ? 'selected' : ''}>🔥 Llano Gas</option>
+              <option value="Bonos Coopchipaque" ${state.editingSalePaymentMethod === 'Bonos Coopchipaque' ? 'selected' : ''}>🎟️ Bonos Coopchipaque</option>
+            </select>
+          </div>
+          <div style="display:flex; gap:10px; margin-top:20px;">
+            <button type="button" onclick="window.deleteSale('${state.editingSaleId}')" class="btn-primary" style="flex:1; background:var(--danger); border:none; height:45px; font-weight:800; border-radius:12px;">Eliminar</button>
+            <button type="submit" class="btn-primary" style="flex:2; height:45px; font-weight:800; border-radius:12px;">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    ` : ''}
+    ${state.activeModal === 'edit_transaction' ? `
+    <div class="modal-overlay">
+      <div class="modal-card card" style="max-width:400px;">
+        <div class="modal-close" onclick="state.activeModal=null;state.editingTransactionId=null;render()">×</div>
+        <div style="text-align:center; margin-bottom:15px;">
+          <div style="background:#fef3c7; color:#d97706; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 10px;">
+            <i data-lucide="edit-3" style="width:24px; height:24px;"></i>
+          </div>
+          <h2 style="margin:0; font-size:18px; color:#0f172a; font-weight:800;">Modificar Transacción</h2>
+          <p style="margin:5px 0 0 0; font-size:13px; color:#64748b;">ID: #${(state.editingTransactionId || '').slice(0,8).toUpperCase()}</p>
+        </div>
+        
+        <form onsubmit="window.saveEditTransaction(event); return false;">
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Monto</label>
+            <input type='text' inputmode='numeric' name="amount" class="form-input currency-input" value="${state.editingTransactionAmount || ''}" required style="font-size:20px; font-weight:900; height:50px; text-align:center; color:var(--success);">
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Tipo</label>
+            <select name="type" class="form-input" required>
+              <option value="income" ${state.editingTransactionType === 'income' ? 'selected' : ''}>Ingreso</option>
+              <option value="expense" ${state.editingTransactionType === 'expense' ? 'selected' : ''}>Egreso / Gasto</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Categoría</label>
+            <select name="category_id" class="form-input" required>
+              <option value="">Seleccionar categoría...</option>
+              ${state.categories.map(c => `<option value="${c.id}" ${state.editingTransactionCategoryId === c.id ? 'selected' : ''}>${c.name} (${c.type === 'income' ? 'Ingreso' : 'Egreso'})</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Sede / Negocio</label>
+            <select name="business_id" class="form-input" required>
+              <option value="">Seleccionar sede...</option>
+              ${state.businesses.map(b => `<option value="${b.id}" ${state.editingTransactionBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Método de Pago</label>
+            <select name="payment_method" class="form-input" required>
+              <option value="Efectivo" ${state.editingTransactionPaymentMethod === 'Efectivo' ? 'selected' : ''}>💵 Efectivo</option>
+              <option value="Addi" ${state.editingTransactionPaymentMethod === 'Addi' ? 'selected' : ''}>💳 Addi</option>
+              <option value="Sistecredito" ${state.editingTransactionPaymentMethod === 'Sistecredito' ? 'selected' : ''}>💳 Sistecredito</option>
+              <option value="Daviplata" ${state.editingTransactionPaymentMethod === 'Daviplata' ? 'selected' : ''}>📱 Daviplata</option>
+              <option value="Transferencia" ${state.editingTransactionPaymentMethod === 'Transferencia' ? 'selected' : ''}>🏦 Transferencia</option>
+              <option value="Llano Gas" ${state.editingTransactionPaymentMethod === 'Llano Gas' ? 'selected' : ''}>🔥 New Gas / Llano Gas</option>
+              <option value="Bonos Coopchipaque" ${state.editingTransactionPaymentMethod === 'Bonos Coopchipaque' ? 'selected' : ''}>🎟️ Bonos Coopchipaque</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Nota / Descripción</label>
+            <input type="text" name="note" class="form-input" value="${state.editingTransactionNote || ''}">
+          </div>
+          <div style="display:flex; gap:10px; margin-top:20px;">
+            <button type="button" onclick="window.deleteTransaction('${state.editingTransactionId}')" class="btn-primary" style="flex:1; background:var(--danger); border:none; height:45px; font-weight:800; border-radius:12px;">Eliminar</button>
+            <button type="submit" class="btn-primary" style="flex:2; height:45px; font-weight:800; border-radius:12px;">Guardar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+    ` : ''}
+    ${state.activeModal === 'edit_product' ? `
+    <div class="modal-overlay">
+      <div class="modal-card card" style="max-width:450px;">
+        <div class="modal-close" onclick="state.activeModal=null;state.editingProductId=null;render()">×</div>
+        <div style="text-align:center; margin-bottom:15px;">
+          <div style="background:#e0f2fe; color:#0284c7; width:48px; height:48px; border-radius:50%; display:flex; align-items:center; justify-content:center; margin:0 auto 10px;">
+            <i data-lucide="package" style="width:24px; height:24px;"></i>
+          </div>
+          <h2 style="margin:0; font-size:18px; color:#0f172a; font-weight:800;">Modificar Producto</h2>
+        </div>
+        
+        <form onsubmit="window.saveEditProduct(event); return false;">
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Nombre del Producto</label>
+            <input type="text" name="name" class="form-input" value="${state.editingProductName || ''}" required>
+          </div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label style="font-weight:700; color:#334155; font-size:13px;">Precio de Venta</label>
+              <input type='text' inputmode='numeric' name="price" class="form-input currency-input" value="${state.editingProductPrice || ''}" required>
+            </div>
+            <div class="form-group">
+              <label style="font-weight:700; color:#334155; font-size:13px;">Costo Base</label>
+              <input type='text' inputmode='numeric' name="cost" class="form-input currency-input" value="${state.editingProductCost || ''}" required>
+            </div>
+          </div>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label style="font-weight:700; color:#334155; font-size:13px;">Stock Actual</label>
+              <input type="number" name="stock" class="form-input" value="${state.editingProductStock ?? 0}" required>
+            </div>
+            <div class="form-group">
+              <label style="font-weight:700; color:#334155; font-size:13px;">Stock Fijo / Ideal</label>
+              <input type="number" name="purchase_price" class="form-input" value="${state.editingProductIdealStock ?? 0}" required>
+            </div>
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Sede / Negocio</label>
+            <select name="business_id" class="form-input" required>
+              <option value="">Seleccionar sede...</option>
+              ${state.businesses.map(b => `<option value="${b.id}" ${state.editingProductBusinessId === b.id ? 'selected' : ''}>${b.name}</option>`).join('')}
+            </select>
+          </div>
+          <div class="form-group">
+            <label style="font-weight:700; color:#334155; font-size:13px;">Género</label>
+            <select name="gender" class="form-input">
+              <option value="">Sin Asignar</option>
+              <option value="hombre" ${state.editingProductGender === 'hombre' ? 'selected' : ''}>👨 Hombre</option>
+              <option value="mujer" ${state.editingProductGender === 'mujer' ? 'selected' : ''}>👩 Mujer</option>
+              <option value="unisex" ${state.editingProductGender === 'unisex' ? 'selected' : ''}>⚧️ Unisex</option>
+            </select>
           </div>
           <button type="submit" class="btn-primary" style="width:100%; height:45px; margin-top:20px; font-size:14px; font-weight:800;">Guardar Cambios</button>
         </form>
@@ -4753,11 +4990,20 @@ window.removeFromCart = (productId) => {
   render();
 };
 
+window.updatePosDiscount = (val) => {
+  const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  state.posDiscount = Math.min(cartTotal, Math.max(0, parseFloat(val) || 0));
+  render();
+};
+
 window.finalizeSale = async () => {
   if (state.cart.length === 0) return;
   
   const pm = state.posPaymentMethod || 'Efectivo';
-  const total = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const cartTotal = state.cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  const discount = state.posDiscount || 0;
+  const total = Math.max(0, cartTotal - discount);
+  const discountFactor = cartTotal > 0 ? total / cartTotal : 1;
   
   try {
     state.loading = true;
@@ -4777,7 +5023,7 @@ window.finalizeSale = async () => {
       sale_id: sale.id,
       product_id: item.product_id,
       quantity: item.quantity,
-      price: item.price
+      price: Math.round(item.price * discountFactor)
     }));
 
     const { error: itemsErr } = await supabase.from('sale_items').insert(saleItems);
@@ -4788,7 +5034,7 @@ window.finalizeSale = async () => {
     state.cart.forEach(item => {
        const bId = item.business_id || state.activeShiftBusinessId || state.user.business_id || (state.businesses.length > 0 ? state.businesses[0].id : null);
        if (bId) {
-          totalsByBusiness[bId] = (totalsByBusiness[bId] || 0) + (item.price * item.quantity);
+          totalsByBusiness[bId] = (totalsByBusiness[bId] || 0) + Math.round((item.price * item.quantity) * discountFactor);
        }
     });
 
@@ -4801,7 +5047,7 @@ window.finalizeSale = async () => {
        user_id: state.user.id,
        date: new Date().toISOString(),
        payment_method: pm,
-       note: `[Venta POS #${sale.id.slice(0,5)}] Clúster Centralizado. Mét: ${pm}`
+       note: `[Venta POS #${sale.id.slice(0,5)}] Clúster Centralizado. Mét: ${pm}${discount > 0 ? ` (Desc: $${discount.toLocaleString()})` : ''}`
     }));
 
     if (transactionRows.length > 0) {
@@ -4814,6 +5060,7 @@ window.finalizeSale = async () => {
 
     // 4. Clear Cart and Return
     state.cart = [];
+    state.posDiscount = 0;
     state.view = 'app';
     await window.fetchData();
     window.showToast('✅ Venta y balance registrados', 'success');
@@ -7306,12 +7553,48 @@ window.saveNewProduct = async (e) => {
     render();
   } catch (err) {
     console.error(err);
-    window.showToast('âŒ Error: ' + err.message, 'danger');
+    window.showToast('â Œ Error: ' + err.message, 'danger');
   } finally {
     btn.disabled = false;
     btn.innerHTML = originalHtml;
   }
 };
+
+window.toggleInventoryPermission = async (userId, currentStatus) => {
+  try {
+    const { error } = await supabase.from('users')
+      .update({ can_manage_inventory: !currentStatus })
+      .eq('id', userId);
+    
+    if (error) throw error;
+    
+    window.showToast('✅ Permiso de inventario actualizado', 'success');
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast('❌ Error al actualizar permiso: ' + err.message, 'danger');
+  }
+};
+
+window.toggleAdminPermission = async (userId, currentRole) => {
+  try {
+    const newRole = currentRole === 'admin' ? 'colaborador' : 'admin';
+    const { error } = await supabase.from('users')
+      .update({ role: newRole })
+      .eq('id', userId);
+    
+    if (error) throw error;
+    
+    window.showToast(`✅ Rol de administrador ${newRole === 'admin' ? 'asignado' : 'retirado'} exitosamente`, 'success');
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast('❌ Error al actualizar rol: ' + err.message, 'danger');
+  }
+};
+
 window.updateUserBusiness = async (userId, businessId) => {
   try {
     const { error } = await supabase.from('users')
@@ -8938,16 +9221,17 @@ window.saveCashClosure = async (e) => {
   }
 };
 
-window.openEditSaleModal = (saleId, currentTotal) => {
+window.openEditSaleModal = (saleId, currentTotal, currentPaymentMethod) => {
   state.editingSaleId = saleId;
   state.editingSaleTotal = currentTotal;
+  state.editingSalePaymentMethod = currentPaymentMethod || 'Efectivo';
   state.activeModal = 'edit_sale';
   render();
 };
 
 window.saveEditSale = async (e) => {
   e.preventDefault();
-  const btn = e.target.querySelector('button');
+  const btn = e.target.querySelector('button[type="submit"]');
   const oldHtml = btn.innerHTML;
   btn.disabled = true;
   btn.innerHTML = '<span class="loading-spinner"></span> Guardando...';
@@ -8955,12 +9239,13 @@ window.saveEditSale = async (e) => {
   try {
     const formData = new FormData(e.target);
     const newTotal = window.getCleanNumber(formData.get('new_total'));
+    const newPaymentMethod = formData.get('payment_method') || 'Efectivo';
     
-    if (newTotal <= 0) throw new Error("El monto debe ser mayor a cero.");
+    if (newTotal < 0) throw new Error("El monto no puede ser negativo.");
 
-    // 1. Update sale total
+    // 1. Update sale total and payment method
     const { error: saleErr } = await supabase.from('sales')
-      .update({ total: newTotal })
+      .update({ total: newTotal, payment_method: newPaymentMethod })
       .eq('id', state.editingSaleId);
       
     if (saleErr) throw saleErr;
@@ -8982,15 +9267,26 @@ window.saveEditSale = async (e) => {
 
     if (tx) {
       const { error: txErr } = await supabase.from('transactions')
-        .update({ amount: newTotal })
+        .update({ 
+          amount: newTotal, 
+          payment_method: newPaymentMethod,
+          note: `[Venta POS #${saleShortId}] Clúster Centralizado. Mét: ${newPaymentMethod}`
+        })
         .eq('id', tx.id);
       if (txErr) console.warn("Error actualizando transacción:", txErr);
     }
 
-    // 3. Alinear el precio del ítem si es venta única (para ecosistema completo)
+    // 3. Alinear el precio del ítem si es venta única (para de ecosistema completo)
     const sItems = state.saleItems.filter(si => si.sale_id === state.editingSaleId);
     if (sItems.length === 1) {
       await supabase.from('sale_items').update({ price: newTotal }).eq('id', sItems[0].id);
+    } else if (sItems.length > 1) {
+      // Si hay varios ítems, prorrateamos el nuevo total
+      const oldTotal = sItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      const ratio = oldTotal > 0 ? newTotal / oldTotal : 1;
+      for (const item of sItems) {
+        await supabase.from('sale_items').update({ price: Math.round(item.price * ratio) }).eq('id', item.id);
+      }
     }
     const pItems = state.pendingProducts.filter(p => p.sale_id === state.editingSaleId);
     if (pItems.length === 1) {
@@ -9006,7 +9302,206 @@ window.saveEditSale = async (e) => {
     console.error(err);
     window.showToast("❌ Error al modificar la venta: " + err.message, "danger");
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = oldHtml;
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = oldHtml;
+    }
+  }
+};
+
+window.deleteSale = async (saleId) => {
+  if (!confirm("¿Está seguro de que desea eliminar esta venta de forma permanente? Se restablecerá el inventario de los productos asociados.")) return;
+  try {
+    // 1. Get sale items to restore stock
+    const { data: items, error: itemsErr } = await supabase
+      .from('sale_items')
+      .select('product_id, quantity')
+      .eq('sale_id', saleId);
+    
+    if (itemsErr) throw itemsErr;
+
+    // 2. Restore stock for each product
+    if (items && items.length > 0) {
+      for (const item of items) {
+        if (item.product_id) {
+          // Increment stock back
+          const { data: p } = await supabase.from('products').select('stock').eq('id', item.product_id).single();
+          if (p) {
+            await supabase.from('products').update({ stock: p.stock + item.quantity }).eq('id', item.product_id);
+          }
+        }
+      }
+    }
+
+    // 3. Delete sale items
+    await supabase.from('sale_items').delete().eq('sale_id', saleId);
+
+    // 4. Delete pending products if any
+    await supabase.from('pending_products').delete().eq('sale_id', saleId);
+
+    // 5. Delete associated transaction
+    const saleShortId = saleId.slice(0,5);
+    const sale = state.sales.find(s => s.id === saleId);
+    let tx = state.transactions.find(t => t.note && t.note.includes(saleShortId));
+    if (!tx && sale) {
+      tx = state.transactions.find(t => 
+        t.type === 'income' && 
+        t.user_id === sale.user_id && 
+        Number(t.amount) === Number(sale.total) &&
+        Math.abs(new Date(t.created_at || t.date) - new Date(sale.created_at)) < 60000
+      );
+    }
+    if (tx) {
+      await supabase.from('transactions').delete().eq('id', tx.id);
+    }
+
+    // 6. Delete sale
+    const { error: delSaleErr } = await supabase.from('sales').delete().eq('id', saleId);
+    if (delSaleErr) throw delSaleErr;
+
+    window.showToast("🗑️ Venta eliminada e inventario restablecido.", "success");
+    state.activeModal = null;
+    state.editingSaleId = null;
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("❌ Error al eliminar la venta: " + err.message, "danger");
+  }
+};
+
+window.openEditTransactionModal = (trxId) => {
+  const t = state.transactions.find(tx => tx.id === trxId);
+  if (!t) return;
+  state.editingTransactionId = trxId;
+  state.editingTransactionAmount = t.amount;
+  state.editingTransactionType = t.type;
+  state.editingTransactionCategoryId = t.category_id;
+  state.editingTransactionBusinessId = t.business_id;
+  state.editingTransactionNote = t.note || '';
+  state.editingTransactionPaymentMethod = t.payment_method || 'Efectivo';
+  state.activeModal = 'edit_transaction';
+  render();
+};
+
+window.saveEditTransaction = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button[type="submit"]');
+  const oldHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span> Guardando...';
+
+  try {
+    const formData = new FormData(e.target);
+    const amount = window.getCleanNumber(formData.get('amount'));
+    const type = formData.get('type');
+    const category_id = formData.get('category_id');
+    const business_id = formData.get('business_id');
+    const note = formData.get('note');
+    const payment_method = formData.get('payment_method');
+
+    const { error } = await supabase.from('transactions')
+      .update({
+        amount,
+        type,
+        category_id: category_id || null,
+        business_id: business_id || null,
+        note: note || null,
+        payment_method
+      })
+      .eq('id', state.editingTransactionId);
+
+    if (error) throw error;
+
+    window.showToast("✅ Transacción modificada correctamente.", "success");
+    state.activeModal = null;
+    state.editingTransactionId = null;
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("❌ Error al modificar transacción: " + err.message, "danger");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = oldHtml;
+    }
+  }
+};
+
+window.deleteTransaction = async (trxId) => {
+  if (!confirm("¿Está seguro de que desea eliminar esta transacción de forma permanente?")) return;
+  try {
+    const { error } = await supabase.from('transactions').delete().eq('id', trxId);
+    if (error) throw error;
+
+    window.showToast("🗑️ Transacción eliminada.", "success");
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("❌ Error al eliminar transacción: " + err.message, "danger");
+  }
+};
+
+window.openEditProductModal = (productId) => {
+  const p = state.products.find(prod => prod.id === productId);
+  if (!p) return;
+  state.editingProductId = productId;
+  state.editingProductName = p.name;
+  state.editingProductPrice = p.price;
+  state.editingProductCost = p.cost;
+  state.editingProductStock = p.stock;
+  state.editingProductIdealStock = p.purchase_price || 0;
+  state.editingProductBusinessId = p.business_id;
+  state.editingProductGender = p.gender || '';
+  state.activeModal = 'edit_product';
+  render();
+};
+
+window.saveEditProduct = async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button[type="submit"]');
+  const oldHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span> Guardando...';
+
+  try {
+    const formData = new FormData(e.target);
+    const name = formData.get('name');
+    const price = window.getCleanNumber(formData.get('price'));
+    const cost = window.getCleanNumber(formData.get('cost'));
+    const stock = window.getCleanNumber(formData.get('stock'));
+    const purchase_price = window.getCleanNumber(formData.get('purchase_price')) || 0;
+    const business_id = formData.get('business_id');
+    const gender = formData.get('gender') || null;
+
+    const { error } = await supabase.from('products')
+      .update({
+        name,
+        price,
+        cost,
+        stock,
+        purchase_price,
+        business_id,
+        gender
+      })
+      .eq('id', state.editingProductId);
+
+    if (error) throw error;
+
+    window.showToast("✅ Producto modificado correctamente.", "success");
+    state.activeModal = null;
+    state.editingProductId = null;
+    await window.fetchData();
+    render();
+  } catch (err) {
+    console.error(err);
+    window.showToast("❌ Error al modificar producto: " + err.message, "danger");
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = oldHtml;
+    }
   }
 };
