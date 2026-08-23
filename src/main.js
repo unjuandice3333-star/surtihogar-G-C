@@ -3597,8 +3597,8 @@ const render = () => {
             </div>
           </div>
           <div class="form-group">
-            <label>Foto</label>
-            <input type="file" name="photo" class="form-input" accept="image/*" capture="environment" style="padding:10px;">
+            <label style="font-size:12px; font-weight:600; color:var(--text-muted);">📷 Foto del Producto <span style="color:#64748b; font-weight:400;">(OPCIONAL - No es obligatoria)</span></label>
+            <input type="file" name="photo" class="form-input" accept="image/*" style="padding:10px;">
           </div>
           <button class="btn-primary" style="width:100%; margin-top:20px; background:var(--secondary); display:flex; align-items:center; justify-content:center; gap:8px;"><i data-lucide="check-circle" style="width:18px;"></i> AGREGAR Y VENDER</button>
         </form>
@@ -6380,22 +6380,27 @@ window.render = render;
 fetchData();
 
 window.uploadPhoto = async (file, bucket = 'photos') => {
-  if (!file) return null;
-  const fileExt = file.name.split('.').pop();
-  const fileName = `${Math.random()}.${fileExt}`;
-  const filePath = `${fileName}`;
-  
-  const { error: uploadError } = await supabase.storage
-    .from(bucket)
-    .upload(filePath, file);
+  if (!file || !file.size || file.size === 0) return null;
+  try {
+    const fileExt = (file.name && file.name.includes('.')) ? file.name.split('.').pop() : 'png';
+    const fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${fileExt}`;
+    const filePath = `${fileName}`;
+    
+    const { error: uploadError } = await supabase.storage
+      .from(bucket)
+      .upload(filePath, file);
 
-  if (uploadError) {
-    console.error('Error al subir imagen:', uploadError);
+    if (uploadError) {
+      console.warn('Error al subir imagen (no bloqueante):', uploadError);
+      return null;
+    }
+
+    const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
+    return data ? data.publicUrl : null;
+  } catch (err) {
+    console.warn('Excepción al subir foto (no bloqueante):', err);
     return null;
   }
-
-  const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
-  return data.publicUrl;
 };
 
 
@@ -6413,6 +6418,8 @@ window.saveQuickSale = async (e) => {
     const price = window.getCleanNumber(formData.get('price'));
     const quantity = window.getCleanNumber(formData.get('quantity'));
     const discount = window.getCleanNumber(formData.get('discount')) || 0;
+    const photoFile = formData.get('photo');
+    
     const grossTotal = price * quantity;
     const total = Math.max(0, grossTotal - discount);
     const noteStr = discount > 0 
@@ -6428,7 +6435,7 @@ window.saveQuickSale = async (e) => {
       return;
     }
 
-    // 1. Subir foto
+    // 1. Subir foto (Opcional - Nunca bloquea la venta)
     let photoUrl = null;
     if (photoFile && photoFile.size > 0) {
       photoUrl = await window.uploadPhoto(photoFile, 'pending_products');
