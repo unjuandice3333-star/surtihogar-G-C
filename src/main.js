@@ -5,6 +5,8 @@ import { DatabaseService } from './services/DatabaseService'
 import { byodService } from './services/ByodComplianceService'
 import { renderSalesHistory } from './views/salesHistory.js'
 import { renderProductsAdmin } from './views/productsAdmin.js'
+import { renderInventoryAIView } from './views/inventoryAIView.js'
+import { analyzeInventoryAI, generateSupplierOrderText, fetchGeminiInventoryAnalysis } from './inventoryAI.js'
 import { Geolocation } from '@capacitor/geolocation'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory } from '@capacitor/filesystem'
@@ -27,6 +29,8 @@ const state = {
   view: 'loading',
   authError: null,
   activeModal: null,
+  geminiApiKey: localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || 'AIzaSyD3nv7WzpZqp3TGtLTPvFpV3lHaf__Rj5U',
+  geminiAnalysisResult: null,
   systemLogs: [],
   realDbSchema: [],
   chartInstance: null,
@@ -1477,7 +1481,6 @@ const render = () => {
               <button onclick="state.posGenderFilter='unisex';render()" style="padding:10px 18px; border-radius:12px; border:1px solid ${state.posGenderFilter==='unisex'?'#8b5cf6':'#e2e8f0'}; background:${state.posGenderFilter==='unisex'?'#8b5cf6':'white'}; color:${state.posGenderFilter==='unisex'?'white':'#64748b'}; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; flex-shrink:0;">⚧️ Unisex</button>
             </div>
             ` : ''}
-          </div>
             <div style="display:flex; gap:10px;">
               ${(state.user?.role === 'admin' || state.user?.can_manage_inventory) ? `
                 <button onclick="state.activeModal='new_product';render()" class="btn-primary" style="width:auto; padding:0 20px; background:var(--primary);">+ NUEVO</button>
@@ -1487,7 +1490,7 @@ const render = () => {
             </div>
           </div>
 
-          <div id="pos-product-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:15px; overflow-y:auto; padding-bottom:50px;">
+          <div id="pos-product-grid" style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); grid-auto-rows: minmax(150px, auto); gap:15px; flex:1; min-height:0; overflow-y:auto; padding-bottom:50px; padding-right:5px;">
             ${window.renderPosProducts()}
           </div>
         </div>
@@ -1533,8 +1536,11 @@ const render = () => {
               </select>
             </div>
             <div class="form-group" style="margin-bottom:15px;">
-              <label style="font-size:11px; font-weight:700;">Descuento (COP)</label>
-              <input type="number" class="form-input" placeholder="0" min="0" max="${cartTotal}" style="height:36px; padding:0 12px; font-size:13px;" value="${state.posDiscount || ''}" oninput="window.updatePosDiscount(this.value)">
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:5px;">
+                <label style="font-size:11px; font-weight:800; color:#4f46e5; text-transform:uppercase; letter-spacing:0.5px;">🏷️ Descuento (COP)</label>
+                ${state.posDiscount > 0 ? `<span onclick="window.updatePosDiscount(0)" style="font-size:10px; color:#ef4444; font-weight:700; cursor:pointer; text-decoration:underline;">Quitar</span>` : ''}
+              </div>
+              <input type="number" class="form-input" placeholder="0" min="0" max="${cartTotal}" style="height:40px; padding:0 12px; font-size:14px; font-weight:700; border-radius:10px; border:1.5px solid #818cf8; background:#f5f3ff;" value="${state.posDiscount || ''}" oninput="window.updatePosDiscount(this.value)">
             </div>
             ${state.posDiscount > 0 ? `
               <div style="display:flex; justify-content:space-between; margin-bottom:5px; font-size:13px; color:#64748b;">
@@ -2439,6 +2445,9 @@ const render = () => {
   }
   else if (state.view === 'products_admin') {
     html = renderProductsAdmin(state, formatCurrency);
+  }
+  else if (state.view === 'inventory_ai') {
+    html = renderInventoryAIView(state, formatCurrency);
   }
   else if (state.view === 'qa_dashboard') {
     html = `
@@ -3359,6 +3368,8 @@ const render = () => {
           <button onclick="window.showShiftReport()" class="btn-primary" style="padding:15px; background:#475569;">📄 REPORTE POR VENDEDOR</button>
           ${(state.user?.role === 'admin' || state.user?.can_manage_inventory) ? `
             <button onclick="state.activeModal='new_product';render()" class="btn-primary" style="padding:15px; background:var(--primary);">+ NUEVO PROD</button>
+            <button onclick="state.activeModal='add_inventory';render()" class="btn-primary" style="padding:15px; background:#10b981;">+ INVENTARIO</button>
+            <button onclick="state.view='products_admin';render()" class="btn-primary" style="padding:15px; background:#475569;">📦 GESTIÓN INVENTARIO</button>
           ` : ''}
         </div>
 
@@ -3563,21 +3574,27 @@ const render = () => {
               <input type="number" name="quantity" class="form-input" value="1" required min="1">
             </div>
           </div>
-          <div class="form-group">
-            <label style="font-weight: 700; display: block; margin-bottom: 5px;">Forma de Pago</label>
-            <select name="payment_method" class="form-input" required style="width:100%; height:40px; padding:5px 10px; border-radius:10px; font-size:13px; font-weight:700; background:white; border:1px solid #cbd5e1;">
-              <option value="Efectivo">💵 Efectivo</option>
-              <option value="Addi">💳 Addi</option>
-              <option value="Sistecredito">💳 Sistecredito</option>
-              <option value="Bonos Coopchipaque">🎟️ Bonos Coopchipaque</option>
-              ${(() => {
-                const activeBus = state.businesses?.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
-                return activeBus?.name?.toLowerCase().includes('baratillo')
-                  ? `<option value="Daviplata">📱 Daviplata</option>`
-                  : `<option value="Transferencia">🏦 Transferencia</option>`;
-              })()}
-              <option value="Llano Gas">🔥 Llano Gas</option>
-            </select>
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+            <div class="form-group">
+              <label style="font-weight: 700; display: block; margin-bottom: 5px;">Forma de Pago</label>
+              <select name="payment_method" class="form-input" required style="width:100%; height:40px; padding:5px 10px; border-radius:10px; font-size:13px; font-weight:700; background:white; border:1px solid #cbd5e1;">
+                <option value="Efectivo">💵 Efectivo</option>
+                <option value="Addi">💳 Addi</option>
+                <option value="Sistecredito">💳 Sistecredito</option>
+                <option value="Bonos Coopchipaque">🎟️ Bonos Coopchipaque</option>
+                ${(() => {
+                  const activeBus = state.businesses?.find(b => b.id === (state.activeShiftBusinessId || state.currentBusinessId));
+                  return activeBus?.name?.toLowerCase().includes('baratillo')
+                    ? `<option value="Daviplata">📱 Daviplata</option>`
+                    : `<option value="Transferencia">🏦 Transferencia</option>`;
+                })()}
+                <option value="Llano Gas">🔥 Llano Gas</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label style="font-weight: 700; display: block; margin-bottom: 5px; color:#4f46e5;">🏷️ Descuento (COP)</label>
+              <input type="number" name="discount" class="form-input" placeholder="0" min="0" style="height:40px; border-radius:10px;">
+            </div>
           </div>
           <div class="form-group">
             <label>Foto</label>
@@ -6395,15 +6412,19 @@ window.saveQuickSale = async (e) => {
     const name = formData.get('name');
     const price = window.getCleanNumber(formData.get('price'));
     const quantity = window.getCleanNumber(formData.get('quantity'));
-    const photoFile = formData.get('photo');
-    const total = price * quantity;
+    const discount = window.getCleanNumber(formData.get('discount')) || 0;
+    const grossTotal = price * quantity;
+    const total = Math.max(0, grossTotal - discount);
+    const noteStr = discount > 0 
+      ? `Venta informal: ${name} (Descuento aplicado: $${discount.toLocaleString('es-CO')})` 
+      : `Venta informal: ${name}`;
 
     const paymentMethod = formData.get('payment_method') || 'Efectivo';
 
     // BLOQUEO DE SEGURIDAD: Venta Rápida (Excluye Admin)
     const isAdmin = state.user?.role === 'admin';
     if (!isAdmin && state.user?.role !== 'admin' && !state.activeShiftBusinessId) {
-      window.showToast("ðŸš« No tienes turno activo para registrar esta mercancía.", "danger");
+      window.showToast("⛔ No tienes turno activo para registrar esta mercancía.", "danger");
       return;
     }
 
@@ -6417,7 +6438,7 @@ window.saveQuickSale = async (e) => {
     const { data: sale, error: saleErr } = await supabase.from('sales').insert({
       user_id: state.user.id,
       total: total,
-      note: `Venta informal: ${name}`,
+      note: noteStr,
       payment_method: paymentMethod
     }).select().single();
 
@@ -6984,6 +7005,73 @@ window.replicateSelectedWeek = async () => {
   } catch (err) {
     console.error(err);
     window.showToast("⚠️ Error replicando turnos: " + err.message, "danger");
+  }
+};
+
+window.copySupplierOrderText = () => {
+  const selectedBusId = state.selectedInventoryAIBusinessId || 'all';
+  const targetDays = state.inventoryAITargetDays || 15;
+  const selectedBusName = selectedBusId === 'all' 
+    ? 'Todas las Sedes' 
+    : (state.businesses.find(b => b.id === selectedBusId)?.name || 'Sede');
+
+  const analysis = analyzeInventoryAI({
+    products: state.products || [],
+    sales: state.sales || [],
+    saleItems: state.saleItems || [],
+    businessId: selectedBusId,
+    targetDays
+  });
+
+  const orderText = generateSupplierOrderText(analysis.replenishmentOrders, selectedBusName);
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(orderText).then(() => {
+      window.showToast('📋 ¡Orden de compra copiada al portapapeles!', 'success');
+    }).catch(() => {
+      window.showToast('⚠️ No se pudo copiar automáticamente.', 'warning');
+    });
+  }
+};
+
+window.runGeminiInventoryAnalysis = async () => {
+  const selectedBusId = state.selectedInventoryAIBusinessId || 'all';
+  const targetDays = state.inventoryAITargetDays || 15;
+  const selectedBusName = selectedBusId === 'all' 
+    ? 'Todas las Sedes' 
+    : (state.businesses.find(b => b.id === selectedBusId)?.name || 'Sede');
+
+  const apiKey = state.geminiApiKey || localStorage.getItem('gemini_api_key') || '';
+
+  const container = document.getElementById('gemini-result-container');
+  if (container) {
+    container.innerHTML = `<div style="text-align:center; padding:15px; color:#818cf8; font-weight:800; font-size:13px;">⚡ Analizando inventarios con Google Gemini IA... Por favor espera...</div>`;
+  }
+
+  const analysis = analyzeInventoryAI({
+    products: state.products || [],
+    sales: state.sales || [],
+    saleItems: state.saleItems || [],
+    businessId: selectedBusId,
+    targetDays
+  });
+
+  try {
+    const resultText = await fetchGeminiInventoryAnalysis({
+      analysis,
+      businessName: selectedBusName,
+      apiKey
+    });
+
+    state.geminiAnalysisResult = resultText;
+    window.showToast('✨ Diagnóstico de Gemini IA generado con éxito', 'success');
+    render();
+  } catch (err) {
+    console.error('Error Gemini IA:', err);
+    if (container) {
+      container.innerHTML = `<div style="color:#f87171; font-weight:700; text-align:center; padding:10px;">⚠️ Error de Gemini IA: ${err.message}</div>`;
+    }
+    window.showToast('❌ Error llamando a Gemini IA: ' + err.message, 'danger');
   }
 };
 
@@ -7680,7 +7768,7 @@ window.renderPosProducts = () => {
     
     return `
     <div class="card" onclick="${isLowStock ? '' : `window.addToCart('${p.id}')`}" 
-      style="cursor:${isLowStock ? 'not-allowed' : 'pointer'}; padding:15px; display:flex; flex-direction:column; justify-content:space-between; transition:all 0.15s ease; border:1px solid ${isLowStock ? '#fecaca' : '#e2e8f0'}; ${isLowStock ? 'opacity:0.6;' : ''} position:relative; overflow:hidden;"
+      style="cursor:${isLowStock ? 'not-allowed' : 'pointer'}; padding:15px; min-height:150px; height:100%; margin-bottom:0; border-radius:16px; display:flex; flex-direction:column; justify-content:space-between; transition:all 0.15s ease; border:1px solid ${isLowStock ? '#fecaca' : '#e2e8f0'}; ${isLowStock ? 'opacity:0.6;' : ''} position:relative; overflow:hidden;"
       ${isLowStock ? '' : 'onmouseenter="this.style.transform=\'translateY(-3px)\';this.style.boxShadow=\'0 8px 25px rgba(0,0,0,0.1)\'"  onmouseleave="this.style.transform=\'none\';this.style.boxShadow=\'none\'"'}>
       ${r.score >= 300 && state.posSearch.trim() ? '<div style="position:absolute; top:0; right:0; background:#10b981; color:white; font-size:8px; font-weight:800; padding:3px 8px; border-radius:0 0 0 8px;">MEJOR RESULTADO</div>' : ''}
       <div>
