@@ -1576,8 +1576,10 @@ const render = () => {
   }
 
   else if (state.view === 'manager_dashboard') {
-    const totalIncome = state.transactions.filter(t => t.type === 'income').reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
-    const totalExpense = state.transactions.filter(t => t.type === 'expense').reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
+    const bizId = state.currentBusinessId || 'all';
+    const filteredTrx = state.transactions.filter(t => bizId === 'all' || t.business_id === bizId);
+    const totalIncome = filteredTrx.filter(t => t.type === 'income').reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
+    const totalExpense = filteredTrx.filter(t => t.type === 'expense').reduce((acc, t) => acc + (parseFloat(t.amount) || 0), 0);
 
     if (!state.payrollFilters) {
       const now = new Date();
@@ -5591,19 +5593,6 @@ window.generateAdminSalesReportPDF = async () => {
     }
 
     // 📊 RESUMEN FINANCIERO Y BALANCES FINALES (PIE DE PÁGINA EXPANDIDO CON CONTROL DE GASTOS)
-    const finalY = (doc.lastAutoTable ? doc.lastAutoTable.finalY : 100) + 15;
-    
-    // Validar salto de página para el gran contenedor de balances
-    if (finalY > 135) {
-      doc.addPage();
-      doc.setPage(doc.getNumberOfPages());
-    }
-
-    const rectY = finalY > 135 ? 20 : finalY;
-
-    // Costos de mercancía calculados dinámicamente según productos vendidos
-
-    // Cálculos Avanzados de EBITDA, Flujo de Caja y Utilidad Total
     let totalOpExpenses = 0;
     let cashExpenses = 0;
     const expenseBreakdown = {};
@@ -5622,26 +5611,31 @@ window.generateAdminSalesReportPDF = async () => {
     const digitalRevenue = totalRevenue - cashRevenue;
     const cashBalance = cashRevenue - cashExpenses; // Físicamente en Caja
 
-    const realProfit = totalRevenue - totalCost - totalOpExpenses; // EBITDA Patrimonial Neto Real
-    const profitMarginPct = totalRevenue > 0 ? ((realProfit / totalRevenue) * 100) : 0;
-    
-    // Métricas analíticas extras
-    const totalTrx = filteredSales.length;
-    const avgTicket = totalTrx > 0 ? totalRevenue / totalTrx : 0;
-
-    // Calcular altura del cuadro dinámicamente
     const usedPayMethods = Object.entries(paymentBreakdown).filter(([_, amt]) => amt > 0);
     const usedExpCategories = Object.entries(expenseBreakdown).filter(([_, amt]) => amt > 0);
     const topSellers = Object.entries(sellerPerformance).sort((a,b) => b[1].total - a[1].total);
     const topProducts = Object.entries(productPerformance).sort((a,b) => b[1] - a[1]).slice(0,3);
 
+    const timeDiff = Math.abs(endMs - startMs);
+    const dayCount = Math.max(1, Math.ceil(timeDiff / (1000 * 60 * 60 * 24)));
     const hasBaratillo = (bizId === 'ec292ea5-5cfd-44d8-8b1c-e093cb719492' || bizId === 'all');
-    const dynamicHeight = 106 + (hasBaratillo ? 15 : 0) + (usedPayMethods.length * 4) + (usedExpCategories.length * 4) + (topSellers.length * 4) + (topProducts.length * 4);
+    const targetSavings = hasBaratillo ? (dayCount * 137000) : 0;
+
+    const dynamicHeight = 120 + (hasBaratillo ? 25 : 0) + (usedPayMethods.length * 4) + (usedExpCategories.length * 4);
+    const lastTableY = doc.lastAutoTable ? doc.lastAutoTable.finalY : 70;
+    const needNewPage = (lastTableY + dynamicHeight) > 180;
+
+    if (needNewPage) {
+      doc.addPage();
+      doc.setPage(doc.getNumberOfPages());
+    }
+
+    const rectY = needNewPage ? 20 : (lastTableY + 10);
 
     // Dibujar contenedor estilizado de Balance General
     doc.setFillColor(248, 250, 252); // Gris neutro suave
     doc.setDrawColor(203, 213, 225); // Borde pizarra
-    doc.rect(155, rectY - 8, 127, dynamicHeight, 'FD'); // Cuadro amplio dinámico
+    doc.rect(155, rectY - 5, 127, dynamicHeight, 'FD'); // Cuadro amplio dinámico
     
     doc.setFont("helvetica", "bold");
     doc.setFontSize(9);
@@ -5699,8 +5693,9 @@ window.generateAdminSalesReportPDF = async () => {
 
     const grossProfit = totalRevenue - totalCost;
     const grossMarginPct = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
-    const netProfit = totalRevenue - totalCost - totalOpExpenses;
-    const netMarginPct = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
+    const netProfitBruto = totalRevenue - totalCost - totalOpExpenses;
+    const netProfitReal = netProfitBruto - targetSavings;
+    const netMarginPct = totalRevenue > 0 ? (netProfitReal / totalRevenue) * 100 : 0;
 
     // BLOQUE B: Estado de Resultados (EBITDA y Rentabilidad)
     doc.setFontSize(9);
@@ -5729,24 +5724,32 @@ window.generateAdminSalesReportPDF = async () => {
     doc.text(`(-) Gastos Operativos:`, 160, currentOffsetY + 44);
     doc.text(`(${formatCurrency(totalOpExpenses)})`, 240, currentOffsetY + 44);
 
+    if (hasBaratillo) {
+      doc.setTextColor(185, 28, 28);
+      doc.text(`(-) Mantenimiento Base ($137k/día x ${dayCount}d):`, 160, currentOffsetY + 48);
+      doc.text(`(${formatCurrency(targetSavings)})`, 240, currentOffsetY + 48);
+    }
+
     doc.setDrawColor(148, 163, 184);
-    doc.line(160, currentOffsetY + 47, 277, currentOffsetY + 47);
+    const lineY = currentOffsetY + (hasBaratillo ? 51 : 47);
+    doc.line(160, lineY, 277, lineY);
 
     doc.setFont("helvetica", "bold");
     doc.setTextColor(15, 23, 42);
     doc.setFontSize(9);
-    doc.text(`(=) UTILIDAD NETA REAL:`, 160, currentOffsetY + 51);
-    doc.text(`${formatCurrency(netProfit)}`, 240, currentOffsetY + 51);
+    const netY = currentOffsetY + (hasBaratillo ? 56 : 51);
+    doc.text(`(=) UTILIDAD NETA REAL DEDUCIDA:`, 160, netY);
+    doc.text(`${formatCurrency(netProfitReal)}`, 240, netY);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
-    doc.text(`      > Margen Neto Final:`, 160, currentOffsetY + 55);
-    doc.text(`${netMarginPct.toFixed(1)}%`, 240, currentOffsetY + 55);
+    doc.text(`      > Margen Neto Final:`, 160, netY + 4);
+    doc.text(`${netMarginPct.toFixed(1)}%`, 240, netY + 4);
 
     // Línea divisoria analíticas
     doc.setDrawColor(148, 163, 184);
-    doc.line(160, currentOffsetY + 59, 277, currentOffsetY + 59);
+    doc.line(160, netY + 8, 277, netY + 8);
 
-    let nextSectionY = currentOffsetY + 65;
+    let nextSectionY = netY + 14;
 
     // Calcular ahorro en Alcancía en base a cierres de caja
     if (hasBaratillo) {
@@ -5755,10 +5758,6 @@ window.generateAdminSalesReportPDF = async () => {
         return cDateStr >= startVal && cDateStr <= endVal && (bizId === 'all' || c.business_id === bizId);
       });
       const totalSavings = filteredClosures.reduce((s, c) => s + (parseFloat(c.savings_amount) || 0), 0);
-      
-      const timeDiff = Math.abs(endMs - startMs);
-      const dayCount = Math.max(1, Math.ceil(timeDiff / (1000 * 60 * 60 * 24)));
-      const targetSavings = dayCount * 137000;
       
       const isGreen = totalSavings >= targetSavings;
 
