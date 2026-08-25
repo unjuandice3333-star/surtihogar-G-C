@@ -7,6 +7,7 @@ import { renderSalesHistory } from './views/salesHistory.js'
 import { renderProductsAdmin } from './views/productsAdmin.js'
 import { renderInventoryAIView } from './views/inventoryAIView.js'
 import { analyzeInventoryAI, generateSupplierOrderText, fetchGeminiInventoryAnalysis } from './inventoryAI.js'
+import { askGlobalGeminiAssistant } from './geminiAI.js'
 import { Geolocation } from '@capacitor/geolocation'
 import { Capacitor } from '@capacitor/core'
 import { Filesystem, Directory } from '@capacitor/filesystem'
@@ -1552,6 +1553,9 @@ const render = () => {
                 <span>- ${formatCurrency(state.posDiscount)}</span>
               </div>
             ` : ''}
+            <button onclick="window.askPosCrossSellGemini()" class="btn-primary" style="width:100%; margin-bottom:12px; background:linear-gradient(135deg, #6366f1 0%, #a855f7 100%); border:none; padding:10px; border-radius:12px; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:center; gap:6px; box-shadow:0 4px 12px rgba(99,102,241,0.25);">
+              ✨ Asesor de Venta IA (Combos)
+            </button>
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
               <span style="font-weight:600;">TOTAL A PAGAR</span>
               <span style="font-size:24px; font-weight:800; color:var(--primary);">${formatCurrency(Math.max(0, cartTotal - (state.posDiscount || 0)))}</span>
@@ -4678,6 +4682,64 @@ const render = () => {
       </div>
     </div>
     ` : ''}
+
+    ${state.activeModal === 'gemini_assistant' ? `
+    <div class="modal-overlay" style="z-index:10000;">
+      <div class="modal-card card" style="max-width:520px; width:95%; max-height:85vh; display:flex; flex-direction:column; background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color:white; border:none; border-radius:24px; box-shadow:0 20px 50px rgba(0,0,0,0.5); overflow:hidden;">
+        
+        <div style="padding:18px 20px; border-bottom:1px solid rgba(255,255,255,0.1); display:flex; justify-content:space-between; align-items:center;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <div style="background:linear-gradient(135deg, #6366f1 0%, #a855f7 100%); width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; box-shadow:0 4px 12px rgba(99,102,241,0.4);">🤖</div>
+            <div>
+              <h3 style="margin:0; font-size:16px; font-weight:900; color:white;">Asistente Gemini IA</h3>
+              <p style="margin:2px 0 0 0; font-size:10.5px; color:#a5b4fc;">Consultor ejecutivo en tiempo real para SurtiHogar & Baratillo</p>
+            </div>
+          </div>
+          <div onclick="state.activeModal=null;render()" style="cursor:pointer; color:#94a3b8; font-size:20px; font-weight:bold; padding:4px 8px;">✕</div>
+        </div>
+
+        <div style="flex:1; overflow-y:auto; padding:20px; display:flex; flex-direction:column; gap:15px;">
+          
+          <div>
+            <p style="font-size:10px; font-weight:800; color:#818cf8; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">💡 Consultas Rápidas</p>
+            <div style="display:flex; flex-wrap:wrap; gap:8px;">
+              <button onclick="window.askQuickGemini('¿Cómo van las ventas de hoy y la utilidad neta considerando los $137.000/día de costo fijo?')" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#e0e7ff; padding:8px 12px; border-radius:10px; font-size:11px; font-weight:600; cursor:pointer;">📊 Resumen Financiero Hoy</button>
+              <button onclick="window.askQuickGemini('¿Qué productos del inventario tienen stock crítico o están por agotarse?')" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#e0e7ff; padding:8px 12px; border-radius:10px; font-size:11px; font-weight:600; cursor:pointer;">📦 Stock Crítico & Reposición</button>
+              <button onclick="window.askQuickGemini('Dame 3 consejos estratégicos para mover la mercancía estancada y aumentar ventas en los locales.')" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15); color:#e0e7ff; padding:8px 12px; border-radius:10px; font-size:11px; font-weight:600; cursor:pointer;">💡 Combos & Estrategia de Venta</button>
+            </div>
+          </div>
+
+          <div id="global-gemini-answer" style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1); border-radius:16px; padding:16px; min-height:80px; font-size:12.5px; line-height:1.6; color:#f1f5f9;">
+            ${state.globalGeminiLastAnswer ? `
+              <div style="white-space:pre-wrap;">${state.globalGeminiLastAnswer}</div>
+            ` : `
+              <div style="text-align:center; color:#94a3b8; font-size:12px; padding:10px 0;">
+                💬 Haz una pregunta a Gemini sobre tus ventas, gastos, productos o rendimiento de tus sedes.
+              </div>
+            `}
+          </div>
+
+        </div>
+
+        <div style="padding:15px 20px; border-top:1px solid rgba(255,255,255,0.1); background:rgba(0,0,0,0.2);">
+          <form onsubmit="window.handleGlobalGeminiQuery(event)" style="display:flex; gap:8px;">
+            <input type="text" id="global-gemini-input" placeholder="Pregunta lo que quieras a Gemini IA..." required style="flex:1; background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.2); color:white; padding:10px 14px; border-radius:12px; font-size:12px;">
+            <button class="btn-primary" style="background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border:none; padding:10px 18px; border-radius:12px; font-size:12px; font-weight:800; cursor:pointer; display:flex; align-items:center; gap:4px;">
+              <span>ENVIAR</span> 🚀
+            </button>
+          </form>
+        </div>
+
+      </div>
+    </div>
+    ` : ''}
+
+    ${state.user ? `
+      <div id="floating-gemini-trigger" onclick="window.toggleGeminiAssistantModal()" style="position:fixed; bottom:20px; right:20px; z-index:9999; display:flex; align-items:center; gap:8px; background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color:white; padding:12px 18px; border-radius:30px; box-shadow:0 8px 25px rgba(99,102,241,0.4); cursor:pointer; font-weight:800; font-size:13px; border:2px solid rgba(255,255,255,0.3); transition:transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+        <span style="font-size:18px;">🤖</span>
+        <span>GEMINI IA</span>
+      </div>
+    ` : ''}
   `;
 
   const toastHtml = `<div id="toast-container"></div>`;
@@ -7119,6 +7181,53 @@ window.runGeminiInventoryAnalysis = async () => {
       window.showToast('❌ Error llamando a Gemini IA: ' + err.message, 'danger');
     }
   }
+};
+
+window.toggleGeminiAssistantModal = () => {
+  if (state.activeModal === 'gemini_assistant') {
+    state.activeModal = null;
+  } else {
+    state.activeModal = 'gemini_assistant';
+  }
+  render();
+};
+
+window.askQuickGemini = async (query) => {
+  const container = document.getElementById('global-gemini-answer');
+  if (container) {
+    container.innerHTML = `<div style="text-align:center; color:#818cf8; font-weight:800; padding:15px; font-size:13px;">⚡ Gemini IA está analizando tu negocio... Por favor espera...</div>`;
+  }
+  try {
+    const text = await askGlobalGeminiAssistant({ query, state });
+    state.globalGeminiLastAnswer = text;
+    if (container) {
+      container.innerHTML = `<div style="white-space:pre-wrap;">${text}</div>`;
+    }
+  } catch (err) {
+    console.error('Error Asistente Gemini:', err);
+    if (container) {
+      container.innerHTML = `<div style="color:#f87171; font-weight:700;">⚠️ Error de Gemini IA: ${err.message}</div>`;
+    }
+  }
+};
+
+window.handleGlobalGeminiQuery = async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('global-gemini-input');
+  if (!input || !input.value.trim()) return;
+  const q = input.value.trim();
+  input.value = '';
+  await window.askQuickGemini(q);
+};
+
+window.askPosCrossSellGemini = async () => {
+  state.activeModal = 'gemini_assistant';
+  render();
+  const cartNames = (state.cart || []).map(i => `${i.name} (x${i.quantity})`).join(', ');
+  const q = cartNames 
+    ? `Basado en los artículos actualmente en el carrito de venta: [${cartNames}], sugiere 3 productos adicionales o combos de venta cruzada de nuestro catálogo para ofrecer al cliente y aumentar el valor del pedido.`
+    : `Dame 3 estrategias rápidas y combos más vendidos para ofrecer a los clientes hoy en el punto de venta.`;
+  await window.askQuickGemini(q);
 };
 
 window.editIdealStock = async (id, currentVal) => {
