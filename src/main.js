@@ -1553,9 +1553,6 @@ const render = () => {
                 <span>- ${formatCurrency(state.posDiscount)}</span>
               </div>
             ` : ''}
-            <button onclick="window.askPosCrossSellGemini()" class="btn-primary" style="width:100%; margin-bottom:12px; background:linear-gradient(135deg, #6366f1 0%, #a855f7 100%); border:none; padding:10px; border-radius:12px; font-weight:800; font-size:12px; display:flex; align-items:center; justify-content:center; gap:6px; box-shadow:0 4px 12px rgba(99,102,241,0.25);">
-              ✨ Asesor de Venta IA (Combos)
-            </button>
             <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
               <span style="font-weight:600;">TOTAL A PAGAR</span>
               <span style="font-size:24px; font-weight:800; color:var(--primary);">${formatCurrency(Math.max(0, cartTotal - (state.posDiscount || 0)))}</span>
@@ -4683,7 +4680,7 @@ const render = () => {
     </div>
     ` : ''}
 
-    ${state.activeModal === 'gemini_assistant' ? `
+    ${(state.activeModal === 'gemini_assistant' && state.user?.role === 'admin') ? `
     <div class="modal-overlay" style="z-index:10000;">
       <div class="modal-card card" style="max-width:520px; width:95%; max-height:85vh; display:flex; flex-direction:column; background:linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color:white; border:none; border-radius:24px; box-shadow:0 20px 50px rgba(0,0,0,0.5); overflow:hidden;">
         
@@ -4691,7 +4688,7 @@ const render = () => {
           <div style="display:flex; align-items:center; gap:10px;">
             <div style="background:linear-gradient(135deg, #6366f1 0%, #a855f7 100%); width:38px; height:38px; border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:20px; box-shadow:0 4px 12px rgba(99,102,241,0.4);">🤖</div>
             <div>
-              <h3 style="margin:0; font-size:16px; font-weight:900; color:white;">Asistente Gemini IA</h3>
+              <h3 style="margin:0; font-size:16px; font-weight:900; color:white;">Asistente Gemini IA (Admin)</h3>
               <p style="margin:2px 0 0 0; font-size:10.5px; color:#a5b4fc;">Consultor ejecutivo en tiempo real para SurtiHogar & Baratillo</p>
             </div>
           </div>
@@ -4734,8 +4731,8 @@ const render = () => {
     </div>
     ` : ''}
 
-    ${state.user ? `
-      <div id="floating-gemini-trigger" onclick="window.toggleGeminiAssistantModal()" style="position:fixed; bottom:20px; right:20px; z-index:9999; display:flex; align-items:center; gap:8px; background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color:white; padding:12px 18px; border-radius:30px; box-shadow:0 8px 25px rgba(99,102,241,0.4); cursor:pointer; font-weight:800; font-size:13px; border:2px solid rgba(255,255,255,0.3); transition:transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">
+    ${state.user?.role === 'admin' ? `
+      <div id="floating-gemini-trigger" onclick="window.toggleGeminiAssistantModal()" style="position:fixed; bottom:20px; right:20px; z-index:9999; display:flex; align-items:center; gap:8px; background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color:white; padding:12px 18px; border-radius:30px; box-shadow:0 8px 25px rgba(99,102,241,0.4); cursor:pointer; font-weight:800; font-size:13px; border:2px solid rgba(255,255,255,0.3); transition:transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'" title="Asistente de IA (Administrador)">
         <span style="font-size:18px;">🤖</span>
         <span>GEMINI IA</span>
       </div>
@@ -7184,6 +7181,10 @@ window.runGeminiInventoryAnalysis = async () => {
 };
 
 window.toggleGeminiAssistantModal = () => {
+  if (state.user?.role !== 'admin') {
+    window.showToast("🔒 El asistente de IA está disponible únicamente para Administradores.", "warning");
+    return;
+  }
   if (state.activeModal === 'gemini_assistant') {
     state.activeModal = null;
   } else {
