@@ -73,8 +73,9 @@ export function renderInventoryAIView(state, formatCurrency) {
             <p style="font-size:11.5px; color:#a5b4fc; margin-top:3px;">Auditoría ejecutiva en tiempo real impulsada por Gemini 1.5/2.0 Flash API</p>
           </div>
           
-          <div style="display:flex; align-items:center; gap:8px;">
+          <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
             <input type="password" id="gemini-key-input" placeholder="Google Gemini API Key..." value="${state.geminiApiKey || ''}" onchange="state.geminiApiKey=this.value; localStorage.setItem('gemini_api_key', this.value)" style="background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.2); color:white; padding:8px 12px; border-radius:10px; font-size:11px; width:180px;">
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" style="font-size:11px; color:#818cf8; font-weight:800; text-decoration:underline; cursor:pointer;" title="Obtener API Key gratis en Google AI Studio">🔑 Obtener Key Gratis</a>
             <button onclick="window.runGeminiInventoryAnalysis()" class="btn-primary" style="background:linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); border:none; padding:9px 18px; border-radius:12px; font-weight:800; font-size:12px; cursor:pointer; box-shadow:0 4px 12px rgba(99,102,241,0.4); display:flex; align-items:center; gap:6px;">
               ⚡ CONSULTAR A GEMINI
             </button>

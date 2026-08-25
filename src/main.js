@@ -29,7 +29,7 @@ const state = {
   view: 'loading',
   authError: null,
   activeModal: null,
-  geminiApiKey: localStorage.getItem('gemini_api_key') || import.meta.env.VITE_GEMINI_API_KEY || 'AIzaSyD3nv7WzpZqp3TGtLTPvFpV3lHaf__Rj5U',
+  geminiApiKey: (localStorage.getItem('gemini_api_key') && !localStorage.getItem('gemini_api_key').includes('AIzaSyD3')) ? localStorage.getItem('gemini_api_key') : '',
   geminiAnalysisResult: null,
   systemLogs: [],
   realDbSchema: [],
@@ -7048,9 +7048,31 @@ window.runGeminiInventoryAnalysis = async () => {
     ? 'Todas las Sedes' 
     : (state.businesses.find(b => b.id === selectedBusId)?.name || 'Sede');
 
-  const apiKey = state.geminiApiKey || localStorage.getItem('gemini_api_key') || '';
+  let apiKey = state.geminiApiKey || localStorage.getItem('gemini_api_key') || '';
+  if (apiKey.includes('AIzaSyD3')) {
+    localStorage.removeItem('gemini_api_key');
+    state.geminiApiKey = '';
+    apiKey = '';
+  }
 
   const container = document.getElementById('gemini-result-container');
+
+  if (!apiKey) {
+    if (container) {
+      container.innerHTML = `
+        <div style="background:rgba(239,68,68,0.1); border:1px solid #f87171; border-radius:14px; padding:18px; text-align:center;">
+          <p style="color:#f87171; font-weight:800; font-size:14px; margin-bottom:6px;">🔑 Ingresa una API Key de Google Gemini</p>
+          <p style="color:#cbd5e1; font-size:12px; margin-bottom:14px;">La clave previa fue revocada por seguridad de Google Cloud. Por favor, pega tu nueva API Key gratuita en la casilla superior de Gemini IA o crea una gratis en Google AI Studio.</p>
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn-primary" style="background:#6366f1; border:none; padding:10px 18px; border-radius:10px; font-size:12px; font-weight:800; text-decoration:none; display:inline-block;">
+            👉 OBTENER MI API KEY GRATIS (Google AI Studio)
+          </a>
+        </div>
+      `;
+    }
+    window.showToast('🔑 Ingresa tu API Key gratuita de Gemini en la casilla de arriba.', 'warning');
+    return;
+  }
+
   if (container) {
     container.innerHTML = `<div style="text-align:center; padding:15px; color:#818cf8; font-weight:800; font-size:13px;">⚡ Analizando inventarios con Google Gemini IA... Por favor espera...</div>`;
   }
@@ -7075,10 +7097,27 @@ window.runGeminiInventoryAnalysis = async () => {
     render();
   } catch (err) {
     console.error('Error Gemini IA:', err);
-    if (container) {
-      container.innerHTML = `<div style="color:#f87171; font-weight:700; text-align:center; padding:10px;">⚠️ Error de Gemini IA: ${err.message}</div>`;
+    if (err.message.includes('leaked') || err.message.includes('API key')) {
+      localStorage.removeItem('gemini_api_key');
+      state.geminiApiKey = '';
+      if (container) {
+        container.innerHTML = `
+          <div style="background:rgba(239,68,68,0.1); border:1px solid #f87171; border-radius:14px; padding:18px; text-align:center;">
+            <p style="color:#f87171; font-weight:800; font-size:14px; margin-bottom:6px;">⚠️ La API Key ingresada fue reportada como revocada por Google.</p>
+            <p style="color:#cbd5e1; font-size:12px; margin-bottom:14px;">Genera una clave personal gratuita en Google AI Studio e ingrésala en la casilla superior de Gemini IA.</p>
+            <a href="https://aistudio.google.com/app/apikey" target="_blank" class="btn-primary" style="background:#6366f1; border:none; padding:10px 18px; border-radius:10px; font-size:12px; font-weight:800; text-decoration:none; display:inline-block;">
+              👉 OBTENER NUEVA API KEY GRATIS EN GOOGLE AI STUDIO
+            </a>
+          </div>
+        `;
+      }
+      window.showToast('🔑 API Key revocada. Genera una nueva en Google AI Studio.', 'danger');
+    } else {
+      if (container) {
+        container.innerHTML = `<div style="color:#f87171; font-weight:700; text-align:center; padding:10px;">⚠️ Error de Gemini IA: ${err.message}</div>`;
+      }
+      window.showToast('❌ Error llamando a Gemini IA: ' + err.message, 'danger');
     }
-    window.showToast('❌ Error llamando a Gemini IA: ' + err.message, 'danger');
   }
 };
 
