@@ -5691,6 +5691,9 @@ window.generateAdminSalesReportPDF = async () => {
     doc.setDrawColor(148, 163, 184);
     doc.line(160, currentOffsetY + 15, 277, currentOffsetY + 15);
 
+    const totalTrx = filteredSales.length;
+    const avgTicket = totalTrx > 0 ? totalRevenue / totalTrx : 0;
+
     const grossProfit = totalRevenue - totalCost;
     const grossMarginPct = totalRevenue > 0 ? (grossProfit / totalRevenue) * 100 : 0;
     const netProfitBruto = totalRevenue - totalCost - totalOpExpenses;
