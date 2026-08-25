@@ -1,4 +1,7 @@
+let _invSearchTimer = null;
+
 export function renderProductsAdmin(state, formatCurrency) {
+  window.formatCurrencyGlobal = formatCurrency;
   const activeFilter = state.selectedInventoryBusinessId || 'all';
   
   const filteredProducts = state.products.filter(p => {
@@ -13,6 +16,105 @@ export function renderProductsAdmin(state, formatCurrency) {
   const totalCostVal = filteredProducts.reduce((sum, p) => sum + ((Number(p.stock) || 0) * (parseFloat(p.cost) || 0)), 0);
   const totalSaleVal = filteredProducts.reduce((sum, p) => sum + ((Number(p.stock) || 0) * (parseFloat(p.price) || 0)), 0);
   const totalUnits = filteredProducts.reduce((sum, p) => sum + (Number(p.stock) || 0), 0);
+
+  // Registrar manejador de búsqueda no destructivo (mantiene el foco y teclado del buscador)
+  window.handleInventorySearch = (val) => {
+    state.inventorySearchQuery = val;
+    clearTimeout(_invSearchTimer);
+    _invSearchTimer = setTimeout(() => {
+      const tbody = document.getElementById('inventory-table-body');
+      const summaryCard = document.getElementById('inventory-summary-card');
+      
+      const currentActiveFilter = state.selectedInventoryBusinessId || 'all';
+      const searchRes = state.products.filter(p => {
+        if (currentActiveFilter !== 'all' && p.business_id !== currentActiveFilter) return false;
+        if (state.inventorySearchQuery) {
+          const q = state.inventorySearchQuery.toLowerCase();
+          return p.name.toLowerCase().includes(q);
+        }
+        return true;
+      });
+
+      const resCost = searchRes.reduce((sum, p) => sum + ((Number(p.stock) || 0) * (parseFloat(p.cost) || 0)), 0);
+      const resSale = searchRes.reduce((sum, p) => sum + ((Number(p.stock) || 0) * (parseFloat(p.price) || 0)), 0);
+      const resUnits = searchRes.reduce((sum, p) => sum + (Number(p.stock) || 0), 0);
+
+      const fmt = window.formatCurrencyGlobal || formatCurrency;
+
+      if (summaryCard) {
+        summaryCard.innerHTML = `
+          <div>
+            <span style="font-size: 11px; font-weight: 800; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px; display: block;">💰 Total Invertido en Mercancía (Costo)</span>
+            <h2 style="font-size: 24px; font-weight: 900; margin: 2px 0 0 0; color: #ffffff;">${fmt(resCost)}</h2>
+          </div>
+          <div style="display: flex; gap: 20px; flex-wrap: wrap; font-size: 12px;">
+            <div>
+              <span style="color: #94a3b8; font-weight: 600; display: block; font-size: 10px; text-transform: uppercase;">Valor Comercial (Venta)</span>
+              <span style="font-weight: 800; color: #f1f5f9; font-size: 15px;">${fmt(resSale)}</span>
+            </div>
+            <div>
+              <span style="color: #94a3b8; font-weight: 600; display: block; font-size: 10px; text-transform: uppercase;">Ganancia Bruta</span>
+              <span style="font-weight: 800; color: #34d399; font-size: 15px;">+${fmt(resSale - resCost)}</span>
+            </div>
+            <div>
+              <span style="color: #94a3b8; font-weight: 600; display: block; font-size: 10px; text-transform: uppercase;" title="Descontando $137.000/día de mantenimiento base">Utilidad Neta (Deducida)</span>
+              <span style="font-weight: 900; color: #38bdf8; font-size: 15px;">+${fmt(Math.max(0, (resSale - resCost) - 137000))}</span>
+            </div>
+            <div>
+              <span style="color: #94a3b8; font-weight: 600; display: block; font-size: 10px; text-transform: uppercase;">Unidades Físicas</span>
+              <span style="font-weight: 800; color: #bae6fd; font-size: 15px;">${resUnits} unds</span>
+            </div>
+          </div>
+        `;
+      }
+
+      if (tbody) {
+        if (searchRes.length === 0) {
+          tbody.innerHTML = `
+            <tr>
+              <td colspan="6" style="padding:40px; text-align:center; color:var(--text-muted); font-size:14px;">
+                🔍 No se encontraron productos que coincidan con "<b>${val}</b>"
+              </td>
+            </tr>
+          `;
+        } else {
+          tbody.innerHTML = searchRes
+            .sort((a,b) => a.name.localeCompare(b.name))
+            .map(p => {
+              const genderBadge = p.gender === 'hombre' ? '<span style="font-size:9px; background:#dbeafe; color:#1d4ed8; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👨 H</span>' : p.gender === 'mujer' ? '<span style="font-size:9px; background:#fce7f3; color:#be185d; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">👩 M</span>' : p.gender === 'unisex' ? '<span style="font-size:9px; background:#ede9fe; color:#6d28d9; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">⚧️ U</span>' : '';
+              const bizName = state.businesses.find(b => b.id === p.business_id)?.name || 'General';
+              const bizBadge = `<span style="font-size:9px; background:#e2e8f0; color:#475569; padding:2px 6px; border-radius:6px; font-weight:700; margin-left:6px;">📍 ${bizName}</span>`;
+              return `
+              <tr style="border-bottom:1px solid #f1f5f9;">
+                <td style="padding:15px; font-weight:600;">${p.name}${genderBadge}${bizBadge}</td>
+                <td style="padding:15px;">${fmt(p.price)}</td>
+                <td style="padding:15px; color:var(--text-muted);">${fmt(p.cost || 0)}</td>
+                <td style="padding:15px; white-space:nowrap;">
+                  <span style="background:${p.stock < (p.purchase_price || 0) ? '#fee2e2' : '#f0f9ff'}; color:${p.stock < (p.purchase_price || 0) ? '#b91c1c' : '#0369a1'}; padding:4px 10px; border-radius:10px; font-weight:700;">
+                    ${p.stock}
+                  </span>
+                  <span style="font-size: 11px; color: var(--text-muted); margin-left: 5px;" title="Stock Fijo / Ideal">
+                    / Fijo: 
+                    <span onclick="window.editIdealStock('${p.id}', ${p.purchase_price || 0})" style="color:var(--primary); font-weight:bold; cursor:pointer; text-decoration:underline;">
+                      ${p.purchase_price || 0}
+                    </span>
+                  </span>
+                </td>
+                <td style="padding:15px; font-size:11px; color:var(--primary); font-weight:600;">👤 ${state.employees.find(e => e.id === p.created_by)?.name || 'Admin'}</td>
+                <td style="padding:15px; text-align:center;">
+                  <button onclick="window.openEditProductModal('${p.id}')" style="background:none; border:none; color:var(--primary); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center; margin-right:8px;" title="Editar Producto">
+                    <i data-lucide="edit-3" style="width:16px; height:16px;"></i>
+                  </button>
+                  <button onclick="window.deleteProduct('${p.id}')" style="background:none; border:none; color:var(--danger); cursor:pointer; padding:6px; display:inline-flex; align-items:center; justify-content:center;" title="Eliminar Producto">
+                    <i data-lucide="trash-2" style="width:16px; height:16px;"></i>
+                  </button>
+                </td>
+              </tr>
+            `}).join('');
+        }
+      }
+    }, 60);
+  };
 
   return `
     <header class="main-header">
@@ -35,7 +137,7 @@ export function renderProductsAdmin(state, formatCurrency) {
     <div class="container">
       
       <!-- TARJETA CONSOLIDADA DE INVERSIÓN EN INVENTARIO -->
-      <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 18px 22px; border-radius: 18px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; box-shadow: 0 10px 20px rgba(15,23,42,0.12);">
+      <div id="inventory-summary-card" style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: white; padding: 18px 22px; border-radius: 18px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; box-shadow: 0 10px 20px rgba(15,23,42,0.12);">
         <div>
           <span style="font-size: 11px; font-weight: 800; color: #38bdf8; text-transform: uppercase; letter-spacing: 0.5px; display: block;">💰 Total Invertido en Mercancía (Costo)</span>
           <h2 style="font-size: 24px; font-weight: 900; margin: 2px 0 0 0; color: #ffffff;">${formatCurrency(totalCostVal)}</h2>
@@ -78,7 +180,7 @@ export function renderProductsAdmin(state, formatCurrency) {
           <!-- Entrada de Búsqueda -->
           <div style="display: flex; flex-direction: column; gap: 4px; min-width: 250px; flex: 2;">
             <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">🔍 Buscar Producto por Nombre</label>
-            <input type="text" placeholder="Escribe para buscar..." value="${state.inventorySearchQuery || ''}" oninput="state.inventorySearchQuery = this.value; window.render()" style="padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 13px; width: 100%;">
+            <input type="text" id="inventory-search-input" placeholder="Escribe para buscar..." value="${state.inventorySearchQuery || ''}" oninput="window.handleInventorySearch(this.value)" style="padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 13px; width: 100%;">
           </div>
 
         </div>
@@ -96,7 +198,7 @@ export function renderProductsAdmin(state, formatCurrency) {
               <th style="padding:15px; text-align:center; border-bottom:1px solid #f1f5f9;">Acciones</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="inventory-table-body">
             ${filteredProducts
               .sort((a,b) => a.name.localeCompare(b.name))
               .map(p => {
