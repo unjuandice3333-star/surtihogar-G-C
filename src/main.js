@@ -9590,3 +9590,23 @@ window.saveEditProduct = async (e) => {
     }
   }
 };
+
+// Manejadores globales de resiliencia para evitar pantallas en blanco bajo cualquier circunstancia
+window.addEventListener('error', (e) => {
+  console.error('⚠️ Error global no capturado:', e.error || e.message);
+  if (state.loading) {
+    state.loading = false;
+    if (state.view === 'loading') state.view = 'auth';
+    if (window.render) window.render();
+  }
+});
+
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('⚠️ Promesa rechazada no capturada:', e.reason);
+  if (state.loading) {
+    state.loading = false;
+    if (state.view === 'loading') state.view = 'auth';
+    if (window.render) window.render();
+  }
+});
+
