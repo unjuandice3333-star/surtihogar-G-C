@@ -5401,6 +5401,12 @@ window.generateAdminSalesReportPDF = async () => {
     const sellerPerformance = {};
     const productPerformance = {};
 
+    // Calcular el porcentaje promedio real de costo sobre precio en el catálogo de productos (CMV promedio)
+    const validProds = (state.products || []).filter(p => (parseFloat(p.price) || 0) > 0 && (parseFloat(p.cost) || 0) > 0);
+    const catalogTotalSale = validProds.reduce((sum, p) => sum + parseFloat(p.price), 0);
+    const catalogTotalCost = validProds.reduce((sum, p) => sum + parseFloat(p.cost), 0);
+    const defaultCostRatio = catalogTotalSale > 0 ? (catalogTotalCost / catalogTotalSale) : 0.65;
+
     filteredSales.forEach(sale => {
       const items = state.saleItems.filter(si => si.sale_id === sale.id);
       
@@ -5446,6 +5452,8 @@ window.generateAdminSalesReportPDF = async () => {
         payMethod = 'Transferencia';
       }
 
+      let saleCostFromItems = 0;
+
       // Detalle textual concatenado de productos con recopilación de costos históricos
       let productsLabel = items.map(i => {
         // Prioridad 1: Relación cargada en RAM. Prioridad 2: Lookup directo en inventario
@@ -5462,22 +5470,27 @@ window.generateAdminSalesReportPDF = async () => {
 
         // Fallbacks de nombres y costos
         if (!pName) {
-          const pending = state.pendingProducts.find(pp => pp.sale_id === sale.id);
+          const pending = state.pendingProducts?.find(pp => pp.sale_id === sale.id);
           if (pending) {
             pName = `${pending.name} (Pte.)`;
             pCost = parseFloat(pending.cost) || 0;
           } else if (sale.note && sale.note.includes('Venta informal')) {
             pName = sale.note.replace('Venta informal: ', '');
-            pCost = 0; // Ventas directas informales asumen costo base 0 por defecto
           } else {
             pName = 'Producto Especial';
-            pCost = 0;
           }
         }
 
         const itemQty = Number(i.quantity) || 1;
+        const itemPrice = parseFloat(i.price) || parseFloat(i.unit_price) || 0;
+
+        // Si el costo no está registrado o es 0, estimar el costo según la tasa real del inventario
+        if (pCost <= 0 && itemPrice > 0) {
+          pCost = itemPrice * defaultCostRatio;
+        }
+
         totalUnits += itemQty;
-        totalCost += (pCost * itemQty);
+        saleCostFromItems += (pCost * itemQty);
         
         let productBizId = i.products?.business_id;
         if (!productBizId) {
@@ -5498,7 +5511,13 @@ window.generateAdminSalesReportPDF = async () => {
         productsLabel = sale.note.replace('Venta informal: ', '').trim() + ' (Directa)';
       }
 
-      // CORRECCIÓN CRÍTICA: Usar 'sale.total' en vez de 'total_amount'
+      // Si la venta no tenía ítems detallados o saleCostFromItems es 0 (ej: venta directa o informal)
+      if (saleCostFromItems <= 0 && saleTotal > 0) {
+        saleCostFromItems = saleTotal * defaultCostRatio;
+        if (items.length === 0) totalUnits += 1;
+      }
+
+      totalCost += saleCostFromItems;
       totalRevenue += saleTotal;
 
       if (!paymentBreakdown[payMethod]) paymentBreakdown[payMethod] = 0;
@@ -6050,6 +6069,11 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
     let totalUnits = 0;
     const paymentBreakdown = { Efectivo: 0, Sistecredito: 0, Addi: 0, 'Llano Gas': 0, Transferencia: 0, Daviplata: 0, 'Bonos Coopchipaque': 0 };
     
+    const validProdsTel = (state.products || []).filter(p => (parseFloat(p.price) || 0) > 0 && (parseFloat(p.cost) || 0) > 0);
+    const catalogTotalSaleTel = validProdsTel.reduce((sum, p) => sum + parseFloat(p.price), 0);
+    const catalogTotalCostTel = validProdsTel.reduce((sum, p) => sum + parseFloat(p.cost), 0);
+    const defaultCostRatioTel = catalogTotalSaleTel > 0 ? (catalogTotalCostTel / catalogTotalSaleTel) : 0.65;
+
     filteredSales.forEach(sale => {
       const items = state.saleItems.filter(si => si.sale_id === sale.id);
       const bizIdsFromProducts = items.map(i => i.products?.business_id).filter(Boolean);
@@ -6066,6 +6090,8 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
       if (payMethod.toLowerCase().includes('daviplata')) payMethod = 'Daviplata';
       else if (payMethod.toLowerCase().includes('nequi') || payMethod.toLowerCase().includes('transferencia')) payMethod = 'Transferencia';
 
+      let saleCostFromItems = 0;
+
       let productsLabel = items.map(i => {
         let pName = i.products?.name;
         let pCost = parseFloat(i.products?.cost) || 0;
@@ -6077,21 +6103,25 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
           }
         }
         if (!pName) {
-          const pending = state.pendingProducts.find(pp => pp.sale_id === sale.id);
+          const pending = state.pendingProducts?.find(pp => pp.sale_id === sale.id);
           if (pending) {
             pName = `${pending.name} (Pte.)`;
             pCost = parseFloat(pending.cost) || 0;
           } else if (sale.note && sale.note.includes('Venta informal')) {
             pName = sale.note.replace('Venta informal: ', '');
-            pCost = 0;
           } else {
             pName = 'Producto Especial';
-            pCost = 0;
           }
         }
         const itemQty = Number(i.quantity) || 1;
+        const itemPrice = parseFloat(i.price) || parseFloat(i.unit_price) || 0;
+
+        if (pCost <= 0 && itemPrice > 0) {
+          pCost = itemPrice * defaultCostRatioTel;
+        }
+
         totalUnits += itemQty;
-        totalCost += (pCost * itemQty);
+        saleCostFromItems += (pCost * itemQty);
         return `${pName} [x${itemQty}]`;
       }).join(', ');
 
@@ -6099,6 +6129,12 @@ window.sendTelegramSalesReport = async (period, isHistorical = false, silent = f
         productsLabel = sale.note.replace('Venta informal: ', '').trim() + ' (Directa)';
       }
 
+      if (saleCostFromItems <= 0 && saleTotal > 0) {
+        saleCostFromItems = saleTotal * defaultCostRatioTel;
+        if (items.length === 0) totalUnits += 1;
+      }
+
+      totalCost += saleCostFromItems;
       totalRevenue += saleTotal;
       if (!paymentBreakdown[payMethod]) paymentBreakdown[payMethod] = 0;
       paymentBreakdown[payMethod] += saleTotal;
