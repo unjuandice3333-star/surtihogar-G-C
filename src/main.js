@@ -2410,13 +2410,34 @@ const render = () => {
     `;
   }
   else if (state.view === 'pending_admin') {
+    const q = (state.pendingSearchQuery || '').toLowerCase().trim();
+    const sort = state.pendingSortOrder || 'newest';
+
+    let displayPending = (state.pendingProducts || []).filter(p => {
+      if (!q) return true;
+      return p.name?.toLowerCase().includes(q) || (p.price && p.price.toString().includes(q));
+    });
+
+    displayPending.sort((a, b) => {
+      const priceA = parseFloat(a.price) || 0;
+      const priceB = parseFloat(b.price) || 0;
+      const dateA = new Date(a.created_at || 0);
+      const dateB = new Date(b.created_at || 0);
+
+      if (sort === 'price_desc') return priceB - priceA;
+      if (sort === 'price_asc') return priceA - priceB;
+      if (sort === 'oldest') return dateA - dateB;
+      if (sort === 'name') return (a.name || '').localeCompare(b.name || '');
+      return dateB - dateA; // newest (default)
+    });
+
     html = `
       <header class="main-header">
         <div class="logo-container">
-          <div class="logo-icon">ðŸ“¦</div>
+          <div class="logo-icon">📦</div>
           <div class="header-title">
-            <p class="role-tag" style="margin:0;">GESTIÓN</p>
-            <h1>Productos Pendientes</h1>
+            <p class="role-tag" style="margin:0;">GESTIÓN (${displayPending.length} PENDIENTES)</p>
+            <h1>Productos Pendientes por Formalizar</h1>
           </div>
         </div>
         <div class="header-actions">
@@ -2425,14 +2446,39 @@ const render = () => {
       </header>
 
       <div class="container">
+        <!-- BARRA DE FILTROS Y BÚSQUEDA RÁPIDA -->
+        <div class="card" style="margin-bottom: 15px; padding: 15px; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; justify-content: space-between; background: #f8fafc; border: 1px solid #e2e8f0;">
+          <div style="display: flex; gap: 15px; flex-wrap: wrap; align-items: center; flex: 1; width: 100%;">
+            
+            <!-- Entrada de Búsqueda por Nombre o Precio -->
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 220px; flex: 2;">
+              <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">🔍 Buscar por Nombre o Precio</label>
+              <input type="text" placeholder="Escribe para buscar..." value="${state.pendingSearchQuery || ''}" oninput="state.pendingSearchQuery = this.value; window.render()" style="padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 13px; width: 100%;">
+            </div>
+
+            <!-- Ordenamiento por Precio / Fecha / Nombre -->
+            <div style="display: flex; flex-direction: column; gap: 4px; min-width: 200px; flex: 1;">
+              <label style="font-size: 11px; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;">💲 Ordenar Lista</label>
+              <select onchange="state.pendingSortOrder = this.value; window.render()" class="form-control" style="padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 13px; background: white; cursor: pointer;">
+                <option value="newest" ${(state.pendingSortOrder || 'newest') === 'newest' ? 'selected' : ''}>📅 Más Recientes Primero</option>
+                <option value="oldest" ${state.pendingSortOrder === 'oldest' ? 'selected' : ''}>📅 Más Antiguos Primero</option>
+                <option value="price_desc" ${state.pendingSortOrder === 'price_desc' ? 'selected' : ''}>💰 Precio: Mayor a Menor ($$$ ➔ $)</option>
+                <option value="price_asc" ${state.pendingSortOrder === 'price_asc' ? 'selected' : ''}>💵 Precio: Menor a Mayor ($ ➔ $$$)</option>
+                <option value="name" ${state.pendingSortOrder === 'name' ? 'selected' : ''}>🔤 Nombre (A ➔ Z)</option>
+              </select>
+            </div>
+
+          </div>
+        </div>
+
         <div style="display:grid; grid-template-columns: 1fr; gap:15px;">
-          ${state.pendingProducts.length === 0 ? '<p style="text-align:center; padding:50px; color:var(--text-muted);">No hay productos pendientes de formalizar</p>' : state.pendingProducts.map(p => `
-            <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:15px;">
+          ${displayPending.length === 0 ? '<p style="text-align:center; padding:50px; color:var(--text-muted);">No se encontraron productos pendientes que coincidan con la búsqueda</p>' : displayPending.map(p => `
+            <div class="card" style="display:flex; justify-content:space-between; align-items:center; padding:15px; flex-wrap:wrap; gap:12px;">
               <div style="display:flex; align-items:center; gap:20px;">
-                ${p.photo_url ? `<img src="${p.photo_url}" style="width:60px; height:60px; border-radius:10px; object-fit:cover;">` : '<div style="width:60px; height:60px; background:#f1f5f9; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:24px;">ðŸ“¦</div>'}
+                ${p.photo_url ? `<img src="${p.photo_url}" style="width:60px; height:60px; border-radius:10px; object-fit:cover;">` : '<div style="width:60px; height:60px; background:#f1f5f9; border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:24px;">📦</div>'}
                 <div>
                   <h3 style="font-size:16px; margin:0;">${p.name}</h3>
-                  <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Vendido: ${p.quantity} unid. a ${formatCurrency(p.price)}</p>
+                  <p style="font-size:12px; color:var(--text-muted); margin-top:4px;">Vendido: ${p.quantity} unid. a <b style="color:var(--primary); font-size:14px;">${formatCurrency(p.price)}</b></p>
                   <p style="font-size:10px; color:#94a3b8; margin-top:2px;">Por: ${state.employees.find(e => e.id === p.created_by)?.name || 'COLABORADOR'} - ${new Date(p.created_at).toLocaleDateString()}</p>
                 </div>
               </div>
@@ -3348,18 +3394,16 @@ const render = () => {
         </div>
 
         <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap:12px; margin-bottom:25px;">
-          ${state.user?.role !== 'admin' ? `
-            <button onclick="window.registerGeolocation('arrival')" class="btn-primary" 
-              style="padding:15px; background:${state.hasActiveAttendance ? '#94a3b8' : '#10b981'}; opacity:${state.hasActiveAttendance ? '0.5' : '1'}; cursor:${state.hasActiveAttendance ? 'not-allowed' : 'pointer'};"
-              ${state.hasActiveAttendance ? 'disabled' : ''}>
-              📍 LLEGADA
-            </button>
-            <button onclick="window.registerGeolocation('departure')" class="btn-primary" 
-              style="padding:15px; background:${!state.hasActiveAttendance ? '#94a3b8' : '#ef4444'}; opacity:${!state.hasActiveAttendance ? '0.5' : '1'}; cursor:${!state.hasActiveAttendance ? 'not-allowed' : 'pointer'};"
-              ${!state.hasActiveAttendance ? 'disabled' : ''}>
-              📍 SALIDA
-            </button>
-          ` : ''}
+          <button onclick="window.registerGeolocation('arrival')" class="btn-primary" 
+            style="padding:15px; background:${state.hasActiveAttendance ? '#94a3b8' : '#10b981'}; opacity:${state.hasActiveAttendance ? '0.5' : '1'}; cursor:${state.hasActiveAttendance ? 'not-allowed' : 'pointer'};"
+            ${state.hasActiveAttendance ? 'disabled' : ''}>
+            📍 LLEGADA
+          </button>
+          <button onclick="window.registerGeolocation('departure')" class="btn-primary" 
+            style="padding:15px; background:${!state.hasActiveAttendance ? '#94a3b8' : '#ef4444'}; opacity:${!state.hasActiveAttendance ? '0.5' : '1'}; cursor:${!state.hasActiveAttendance ? 'not-allowed' : 'pointer'};"
+            ${!state.hasActiveAttendance ? 'disabled' : ''}>
+            📍 SALIDA
+          </button>
           <button onclick="window.openPos()" class="btn-primary" style="padding:15px; background:var(--secondary);">+ VENTA (POS)</button>
           <button onclick="state.activeModal='shopping_list';render()" class="btn-primary" style="padding:15px; background:#8b5cf6;">📋 POR TRAER</button>
           ${(state.user?.role === 'admin' || state.user?.is_cashier) ? `
@@ -6998,21 +7042,42 @@ window.deletePendingProduct = async (id) => {
 };
 
 window.deleteProduct = async (id) => {
-  if (!confirm("¿Estás seguro de que deseas eliminar este producto permanentemente del inventario? Esta acción no se puede deshacer y fallará si el producto tiene ventas asociadas.")) return;
+  const prod = state.products?.find(p => p.id === id);
+  const prodName = prod ? prod.name : 'este producto';
+  
+  if (!confirm(`¿Estás seguro de que deseas eliminar permanentemente "${prodName}" del inventario?`)) return;
+
   try {
     const { error } = await supabase.from('products').delete().eq('id', id);
     if (error) {
       if (error.code === '23503') {
-        throw new Error("No se puede eliminar este producto porque ya tiene ventas o movimientos de inventario registrados.");
+        const confirmUnlink = confirm(`El producto "${prodName}" tiene ventas o movimientos históricos asociados.\n\n¿Deseas desvincular las ventas pasadas (conservando intactos los reportes y montos monetarios) para eliminar el producto duplicado del inventario?`);
+        if (!confirmUnlink) return;
+
+        window.showToast("⏳ Desvinculando registros históricos para permitir borrado...", "info");
+        
+        // 1. Desvincular de sale_items
+        await supabase.from('sale_items').update({ product_id: null }).eq('product_id', id);
+
+        // 2. Desvincular de inventory_movements si aplica
+        try {
+          await supabase.from('inventory_movements').update({ product_id: null }).eq('product_id', id);
+        } catch(e) {}
+
+        // 3. Reintentar borrado del producto
+        const { error: retryErr } = await supabase.from('products').delete().eq('id', id);
+        if (retryErr) throw retryErr;
+      } else {
+        throw error;
       }
-      throw error;
     }
-    window.showToast("✅ Producto eliminado del inventario", "success");
+
+    window.showToast(`✅ "${prodName}" eliminado correctamente del inventario.`, "success");
     await window.fetchData();
     render();
   } catch (err) {
     console.error(err);
-    window.showToast("⚠️ " + err.message, "danger");
+    window.showToast("⚠️ Error al eliminar producto: " + err.message, "danger");
   }
 };
 
