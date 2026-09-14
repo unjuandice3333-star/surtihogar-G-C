@@ -143,8 +143,8 @@ window.fetchData = async () => {
     if (state.user?.role === 'admin') {
       try {
         // Limpieza inyectada temporal para inicializar turnos de André y Andrea Torres sin afectar a los demás
-        const hasCleanedV6 = localStorage.getItem('shifts_cleaned_v6');
-        if (!hasCleanedV6) {
+        const hasCleanedV7 = localStorage.getItem('shifts_cleaned_v7');
+        if (!hasCleanedV7) {
           window.showToast("⏳ Inicializando turnos para André y Andrea Torres...", "info");
           const today = new Date();
           today.setHours(0,0,0,0);
@@ -153,7 +153,7 @@ window.fetchData = async () => {
             // 1. Eliminar SOLAMENTE los turnos futuros de André y Andrea Torres
             await supabase.from('shifts')
               .delete()
-              .in('user_id', ['ef4d854e-c6d4-4307-a7ff-18cd167eddde', '3c076f65-ff17-4116-9303-7758ab0f20a7'])
+              .in('user_id', ['ef4d854e-c6d4-4307-a7ff-18cd167eddde', 'db1315ec-bddd-42cd-b2ff-c9697340a4f7'])
               .gte('start_time', today.toISOString());
               
             // 2. Generar sus turnos por defecto desde hoy hasta fin del próximo mes
@@ -167,7 +167,7 @@ window.fetchData = async () => {
             while (tempDate <= nextMonthEnd) {
               const day = tempDate.getDay();
               
-              // André (ef4d854e-c6d4-4307-a7ff-18cd167eddde)
+              // André (ef4d854e-c6d4-4307-a7ff-18cd167eddde - Electrodomésticos)
               if (day !== 5 && day !== 6) { // Domingo a Jueves
                 const start = new Date(tempDate);
                 start.setHours(8, 30, 0, 0);
@@ -181,15 +181,15 @@ window.fetchData = async () => {
                 });
               }
               
-              // Andrea Torres (3c076f65-ff17-4116-9303-7758ab0f20a7)
+              // Andrea Torres (db1315ec-bddd-42cd-b2ff-c9697340a4f7 - J&M Ropa)
               if (day !== 4 && day !== 6) { // Domingo a Miércoles y Viernes
                 const start = new Date(tempDate);
                 start.setHours(10, 0, 0, 0);
                 const end = new Date(tempDate);
                 end.setHours(20, 0, 0, 0);
                 shiftsToInsert.push({
-                  user_id: '3c076f65-ff17-4116-9303-7758ab0f20a7',
-                  business_id: '9b99027c-7471-4c16-80c2-29e2645312e8',
+                  user_id: 'db1315ec-bddd-42cd-b2ff-c9697340a4f7',
+                  business_id: '9b99027c-7471-4c16-80c2-29e2645312e8', // J&M Ropa
                   start_time: start.toISOString(),
                   end_time: end.toISOString()
                 });
@@ -206,7 +206,7 @@ window.fetchData = async () => {
               }
             }
             
-            localStorage.setItem('shifts_cleaned_v6', 'true');
+            localStorage.setItem('shifts_cleaned_v7', 'true');
             localStorage.removeItem('last_shift_generation_check'); // Forzar ejecución del generador
             window.showToast("✅ Turnos inicializados exitosamente.", "success");
           } catch(e) {
