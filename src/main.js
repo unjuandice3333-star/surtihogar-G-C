@@ -546,7 +546,9 @@ window.fetchData = async () => {
 
     // 6. Actualizar Turno Activo y Negocio Definitivo (Arquitectura Robustecida)
     state.activeShiftBusinessId = resolveActiveBusiness(state.shifts, state.user);
-    state.currentBusinessId = state.activeShiftBusinessId || 'all';
+    state.currentBusinessId = (state.activeShiftBusinessId && state.activeShiftBusinessId !== 'all') 
+      ? state.activeShiftBusinessId 
+      : (state.user?.business_id || (state.user?.role === 'admin' ? 'all' : (state.businesses[0]?.id || 'all')));
 
     // 7. Carga de productos (Agrupación Inteligente para Clúster Centralizado)
     let prodData = [];
@@ -863,15 +865,17 @@ window.saveTransaction = async (e, type) => {
     // 1. Validar Usuario y Sesión
     const { data: { session } } = await supabase.auth.getSession();
     if (!session || state.user.id !== session.user.id) {
-      throw new Error("âš ï¸ Error de Autenticación: Tu sesión ha expirado o no es válida.");
+      throw new Error("âš ï¸  Error de Autenticación: Tu sesión ha expirado o no es válida.");
     }
 
-    // 2. Determinar Negocio (Sincronizado con el Dashboard)
-    const busId = state.currentBusinessId;
+    // 2. Determinar Negocio (Sincronizado con el Dashboard y Fallback de Sede del Empleado)
+    let busId = (state.currentBusinessId && state.currentBusinessId !== 'all') 
+      ? state.currentBusinessId 
+      : (state.activeShiftBusinessId !== 'all' && state.activeShiftBusinessId ? state.activeShiftBusinessId : (state.user?.business_id || state.businesses[0]?.id));
     const fueraDeTurno = !state.activeShiftBusinessId;
 
-    if (!busId || busId === 'all') {
-      throw new Error("âš ï¸ Error: No se puede determinar el negocio actual. Por favor, asegíºrate de tener un turno activo o una sede asignada.");
+    if (!busId) {
+      throw new Error("⚠️ Error: No se puede determinar el negocio actual. Por favor, asegúrate de tener una sede asignada a tu usuario.");
     }
 
     // Limpiar puntos de miles si el usuario los pone manualmente
@@ -1558,9 +1562,9 @@ const render = () => {
               <span style="font-size:24px; font-weight:800; color:var(--primary);">${formatCurrency(Math.max(0, cartTotal - (state.posDiscount || 0)))}</span>
             </div>
             
-            ${(!state.activeShiftBusinessId && state.user?.role !== 'admin') ? `
+            ${(!state.activeShiftBusinessId && !state.user?.business_id && state.user?.role !== 'admin') ? `
               <div style="background:#fee2e2; color:#991b1b; padding:10px; border-radius:10px; font-size:12px; text-align:center; font-weight:700; margin-bottom:10px;">
-                ⚠️ TURNO INACTIVO: Activa tu asistencia para poder vender.
+                ⚠️ SIN SEDE ASIGNADA: Pide al Administrador que te asigne un local para poder vender.
               </div>
               <button disabled class="btn-primary" style="width:100%; height:60px; font-size:18px; border-radius:15px; opacity:0.5; cursor:not-allowed;">BLOQUEADO</button>
             ` : `
@@ -1570,6 +1574,17 @@ const render = () => {
             `}
           </div>
         </div>
+        
+        ${state.cart.length > 0 ? `
+          <div onclick="document.getElementById('pos-cart-section')?.scrollIntoView({ behavior: 'smooth' })" style="position:fixed; bottom:15px; left:15px; right:15px; background:linear-gradient(135deg, #10b981 0%, #059669 100%); color:white; padding:12px 20px; border-radius:16px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 10px 25px rgba(16,185,129,0.4); z-index:9999; cursor:pointer;">
+            <div style="display:flex; align-items:center; gap:8px; font-weight:800; font-size:14px;">
+              🛒 Carrito (${state.cart.reduce((sum, item) => sum + item.quantity, 0)} unds)
+            </div>
+            <div style="font-weight:900; font-size:15px;">
+              ${formatCurrency(Math.max(0, cartTotal - (state.posDiscount || 0)))} ➔ Ver Carrito
+            </div>
+          </div>
+        ` : ''}
         `}
       </div>
     `;
@@ -4873,11 +4888,15 @@ window.addToCart = (productId) => {
   if (!product) return;
   
   const existing = state.cart.find(item => item.product_id === productId);
+  let newQty = 1;
   if (existing) {
     existing.quantity += 1;
+    newQty = existing.quantity;
   } else {
     state.cart.push({ ...product, product_id: product.id, quantity: 1 });
   }
+  
+  window.showToast(`🛒 "${product.name}" (${newQty} unds) en el carrito`, "success");
   render();
 };
 
